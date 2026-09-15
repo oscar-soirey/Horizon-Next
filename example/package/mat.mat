@@ -1,7 +1,0 @@
-{
-	"shader": "sprite",
-	
-	"surface": {
-		"Albedo": "hollow.png"
-	}
-}
