@@ -1,0 +1,11 @@
+/* Contains additional include path or third party libraries */
+{
+	"include-path":
+	[
+		"include/imgui"
+	]
+	"libs":
+	[
+		"lib/imgui/imgui.dll.lib"
+	]
+}

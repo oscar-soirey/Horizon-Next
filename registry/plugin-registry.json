@@ -1,0 +1,23 @@
+{
+  "version": "2026.1.0 beta",
+  "plugins": [
+    {
+      "name": "FBX-Importer",
+      "category": "Import",
+      "description": "Import fbx files and convert to .mesh file.",
+      "author": "Horizon",
+      "download_url": "https://github.com/oscar-soirey/Horizon-Next/releases/download/fbx-importer-0.0/fbx-importer.dll",
+      "version": "0.0",
+      "sha256": ""
+    },
+    {
+      "name": "ImGui debugger",
+      "category": "Debug",
+      "description": "Use ImGui with C++ interface to in game debug.",
+      "author": "Horizon",
+      "download_url": "https://github.com/toi/hn-plugins/releases/download/audio-2.0.0/AudioFMOD.dll",
+      "version": "2.0.0",
+      "sha256": ""
+    }
+  ]
+}

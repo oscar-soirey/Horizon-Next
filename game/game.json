@@ -1,0 +1,8 @@
+/* Project file */
+{
+	"engine-version": 3.0
+	"plugins":
+	[
+		"fbx-importer", "in-game-imgui"
+	]
+}
