@@ -12,7 +12,8 @@
 #include "scripting/lua_vm.h"
 
 
-#include "editor/compilation/compilation.h"
+#include "tools/compilation/compilation.h"
+#include "tools/network/access_repo.h"
 
 
 
@@ -32,6 +33,12 @@ int main()
 	//hn::editor::CompileGame("S:/Documents/CLionProjects/vulkan", 20);
 	//hn::editor::CompileLuaFiles("Assets");
 
+	auto entries = hn::tools::FetchPluginManifest("https://raw.githubusercontent.com/oscar-soirey/Horizon-Next/main/registry/plugin-registry.json");
+	for (const auto& e: entries)
+	{
+		std::cout << e.name << std::endl;
+		hn::tools::DownloadPlugin(e.downloadUrl.c_str(), "Downloads");
+	}
 
 	engine.CreateLevel("scene.xml");
 

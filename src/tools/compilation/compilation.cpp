@@ -128,7 +128,7 @@ int RunCommand(
 
 
 
-namespace hn::editor
+namespace hn::tools
 {
     int MakeArchive(const char *assets_path)
     {

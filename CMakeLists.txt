@@ -28,6 +28,16 @@ message(STATUS "${OGRE_CONFIG_DIR}")
 
 find_package(OGRE REQUIRED COMPONENTS Bites CONFIG)
 
+include(FetchContent)
+FetchContent_Declare(
+		curl
+		GIT_REPOSITORY https://github.com/curl/curl.git
+		GIT_TAG curl-8_10_1
+)
+set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)  # utilise SChannel Windows au lieu d'OpenSSL
+FetchContent_MakeAvailable(curl)
+
 
 file(GLOB LUA_SOURCE
 		"${CMAKE_SOURCE_DIR}/third-party/lua/*.c"
@@ -87,12 +97,17 @@ add_library(horizon-next SHARED
 
 		#scripting
 		src/scripting/lua_vm.cpp
+
+		#tools
+		src/tools/compilation/compilation.cpp
+		src/tools/network/access_repo.cpp
 )
 
 target_link_libraries(horizon-next
 	PRIVATE
 		OgreMain
 		OgreBites
+		libcurl
 )
 
 
@@ -155,15 +170,18 @@ target_link_libraries(example-game
 # ============================================================
 add_executable(game
 	src/main.cpp
-
-
-		###Placeholder
-		src/editor/compilation/compilation.cpp
 )
 
 target_link_libraries(game
 		PRIVATE
 		horizon-next
+)
+
+add_custom_command(TARGET game POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+		$<TARGET_RUNTIME_DLLS:game>
+		$<TARGET_FILE_DIR:game>
+		COMMAND_EXPAND_LISTS
 )
 
 
@@ -173,12 +191,18 @@ target_link_libraries(game
 # ============================================================
 add_executable(editor
 		src/editor/main.cpp
-		src/editor/compilation/compilation.cpp
 )
 
 target_link_libraries(editor
 		PRIVATE
 		horizon-next
+)
+
+add_custom_command(TARGET editor POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+		$<TARGET_RUNTIME_DLLS:editor>
+		$<TARGET_FILE_DIR:editor>
+		COMMAND_EXPAND_LISTS
 )
 
 
