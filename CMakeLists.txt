@@ -3,6 +3,8 @@ project(horizon-next
 		LANGUAGES C CXX
 )
 
+set(CMAKE_BUILD_TYPE Release)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -189,12 +191,29 @@ add_custom_command(TARGET game POST_BUILD
 # ============================================================
 # EDITOR EXECUTABLE
 # ============================================================
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(KDDockWidgets-Qt6 REQUIRED)
+
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
+
+
 add_executable(editor
 		src/editor/main.cpp
+		src/editor/common.cpp
+		src/editor/ui/application.cpp
+		src/editor/ui/main_window.cpp
+		src/editor/ui/title_bar.cpp
+		src/editor/widgets/viewport.cpp
 )
 
 target_link_libraries(editor
 		PRIVATE
+		Qt6::Core
+		Qt6::Gui
+		Qt6::Widgets
+		KDAB::kddockwidgets
 		horizon-next
 )
 

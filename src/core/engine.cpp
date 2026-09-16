@@ -20,6 +20,11 @@
 #include <Ogre.h>
 #include <Bites/OgreApplicationContext.h>
 #include <Bites/OgreTrays.h>
+#include <OgreWindowEventUtilities.h>
+
+
+
+#define DEBUG printf("%d\n", __LINE__)
 
 
 
@@ -60,7 +65,7 @@ namespace hn
 	}
 
 
-	Engine::Engine(const char *configuration_file, bool editor, Logger* logger): using_editor_(editor)
+	Engine::Engine(const char *configuration_file, bool editor, bool create_window, Logger* logger, LoopListener* loop_listener): using_editor_(editor), has_window_(create_window)
 	{
 		//Init log.h
 		InitLog(this);
@@ -76,6 +81,20 @@ namespace hn
 		}
 		logger_->SetEnginePointer(this);
 
+
+		//Creer le loop listener
+		if (loop_listener)
+		{
+			loop_listener_ = loop_listener;
+		}
+		else
+		{
+			loop_listener_ = new LoopListener();
+		}
+		loop_listener_->SetEnginePointer(this);
+
+
+
 		//Intercept messages
 		//cout
 		streambuf_ = new EngineStreambuf(this);
@@ -89,7 +108,7 @@ namespace hn
 
 
 		config_ = new HN_Ini(configuration_file);
-		rendering_backend_ = new rendering_interface(this);
+		rendering_backend_ = new rendering_interface(this, !using_editor_);
 
 
 		//Register lua functions
@@ -190,6 +209,93 @@ namespace hn
 
 		//Close game
 		rendering_backend_->ctx.closeApp();
+	}
+
+	void Engine::ProgressOneFrame(double dt)
+	{
+		current_delta_time_ = dt;
+
+
+		if (loop_listener_)
+		{
+			loop_listener_->ExecuteLoop(dt);
+		}
+
+
+		//refresh les debug messages sur le viewport
+		for (auto it = rendering_backend_->viewport_labels.begin(); it != rendering_backend_->viewport_labels.end(); )
+		{
+			it->time_remaning -= dt;
+			if (it->time_remaning <= 0.0)
+			{
+				rendering_backend_->tray_mgr->destroyWidget(it->label);
+				it = rendering_backend_->viewport_labels.erase(it);
+			}
+			else
+			{
+				++it;
+			}
+		}
+		rendering_backend_->tray_mgr->frameRendered({1.f, Ogre::Real(dt)});
+
+
+		//Call lua Update global function
+		GetLuaVM()->Update((float)dt);
+
+
+
+		//update physics (before update actors)
+		if (game_tick_enabled_)
+		{
+			//call player controller tick (internal hidden function)
+			//calls process input actor method (called before actor and physics update)
+			PlayerControllersTick(dt);
+
+			//update physics, before actor ticks and update
+			//physics::UpdateWorld(_deltatime);
+		}
+
+		if (current_opened_level_)
+		{
+			for (const auto& a : current_opened_level_->GetActors())
+			{
+				a->Update(dt);
+			}
+		}
+
+		if (game_tick_enabled_)
+		{
+			//update actors
+			if (current_opened_level_)
+			{
+				for (const auto& a : current_opened_level_->GetActors())
+				{
+					a->Tick(dt);
+				}
+			}
+
+			//reset just pressed keys (called after actors update)
+			hge::priv::input::Tick();
+		}
+
+
+		for (const auto& [n, p]: plugins_)
+		{
+			p->sys_plugin->GetPlugin()->Tick(dt);
+			if (game_tick_enabled_)
+			{
+				p->sys_plugin->GetPlugin()->GameTick(dt);
+			}
+		}
+
+		if (has_window_)
+		{
+			Ogre::WindowEventUtilities::messagePump();
+		}
+		else
+		{
+			rendering_backend_->root->renderOneFrame();
+		}
 	}
 
 

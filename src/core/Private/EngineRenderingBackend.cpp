@@ -41,75 +41,7 @@ public:
 
 	bool frameStarted(const Ogre::FrameEvent& evt) override
 	{
-		engine->current_delta_time_ = evt.timeSinceLastFrame;
-
-
-		//refresh les debug messages sur le viewport
-		for (auto it = viewport_labels.begin(); it != viewport_labels.end(); )
-		{
-			it->time_remaning -= evt.timeSinceLastFrame;
-			if (it->time_remaning <= 0.0)
-			{
-				tray_mgr->destroyWidget(it->label);
-				it = viewport_labels.erase(it);
-			}
-			else
-			{
-				++it;
-			}
-		}
-		tray_mgr->frameRendered(evt);
-
-
-		//Call lua Update global function
-		engine->GetLuaVM()->Update(evt.timeSinceLastFrame);
-
-
-
-		//update physics (before update actors)
-		if (engine->game_tick_enabled_)
-		{
-			//call player controller tick (internal hidden function)
-			//calls process input actor method (called before actor and physics update)
-			PlayerControllersTick(evt.timeSinceLastFrame);
-
-			//update physics, before actor ticks and update
-			//physics::UpdateWorld(_deltatime);
-		}
-
-		if (engine->current_opened_level_)
-		{
-			for (const auto& a : engine->current_opened_level_->GetActors())
-			{
-				a->Update(evt.timeSinceLastFrame);
-			}
-		}
-
-		if (engine->game_tick_enabled_)
-		{
-			//update actors
-			if (engine->current_opened_level_)
-			{
-				for (const auto& a : engine->current_opened_level_->GetActors())
-				{
-					a->Tick(evt.timeSinceLastFrame);
-				}
-			}
-
-			//reset just pressed keys (called after actors update)
-			hge::priv::input::Tick();
-		}
-
-
-		for (const auto& [n, p]: engine->plugins_)
-		{
-			p->sys_plugin->GetPlugin()->Tick(evt.timeSinceLastFrame);
-			if (engine->game_tick_enabled_)
-			{
-				p->sys_plugin->GetPlugin()->GameTick(evt.timeSinceLastFrame);
-			}
-		}
-
+		engine->ProgressOneFrame(evt.timeSinceLastFrame);
 
 		return true;
 	}
@@ -117,7 +49,7 @@ public:
 
 
 
-rendering_interface::rendering_interface(hn::Engine* engine): engine(engine)
+rendering_interface::rendering_interface(hn::Engine* engine, bool createWindow): engine(engine)
 {
 	//créer le LogManager et le log avant Root, pour attacher le listener tôt
 	log_manager = new Ogre::LogManager();

@@ -54,7 +54,7 @@ hn::Engine* engine=nullptr;
 	OgreBites::TrayManager* tray_mgr = nullptr;
 	std::vector<viewport_labels_t> viewport_labels;  //each print to viewport log messages
 
-	rendering_interface(hn::Engine* engine);
+	rendering_interface(hn::Engine* engine, bool createWindow);
 
 	~rendering_interface();
 

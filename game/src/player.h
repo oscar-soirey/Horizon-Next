@@ -15,6 +15,7 @@ public:
 
 	Player()
 	{
+		printf("hello player");
 		HPROPERTY(life, hge::Exposed);
 		hn::LogViewport("HELLO FROM PLAYER", 200);
 		auto* mesh = HCOMPONENT("mesh", hn::HN_StaticMesh);

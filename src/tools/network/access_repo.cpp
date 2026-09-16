@@ -71,8 +71,38 @@ namespace hn::tools
 	}
 
 
-	int DownloadPlugin(const char* downloadUrl, const char* destPath)
+	// Extrait le nom de fichier depuis une URL (tout ce qui suit le dernier '/')
+	std::string ExtractFileNameFromUrl(const std::string& url)
 	{
+		size_t lastSlash = url.find_last_of('/');
+		if (lastSlash == std::string::npos)
+			return url; // pas de '/', l'URL entiere est consideree comme le nom
+
+		std::string fileName = url.substr(lastSlash + 1);
+
+		// Coupe les eventuels parametres de query string (?token=...)
+		size_t queryPos = fileName.find('?');
+		if (queryPos != std::string::npos)
+			fileName = fileName.substr(0, queryPos);
+
+		return fileName;
+	}
+
+	int DownloadPlugin(const char* downloadUrl, const char* destDir)
+	{
+		// Construit le chemin complet : dossier + nom de fichier extrait de l'URL
+		std::string fileName = ExtractFileNameFromUrl(downloadUrl);
+		if (fileName.empty())
+		{
+			std::cerr << "Erreur: impossible d'extraire le nom de fichier depuis l'URL" << std::endl;
+			return -5;
+		}
+
+		std::filesystem::path destPath = std::filesystem::path(destDir) / fileName;
+
+		// Cree le dossier de destination s'il n'existe pas
+		std::filesystem::create_directories(destDir);
+
 		CURL* curl = curl_easy_init();
 		if (!curl)
 		{
@@ -80,7 +110,7 @@ namespace hn::tools
 			return -1;
 		}
 
-		FILE* fp = fopen(destPath, "wb");
+		FILE* fp = fopen(destPath.string().c_str(), "wb");
 		if (!fp)
 		{
 			std::cerr << "Erreur: impossible d'ouvrir " << destPath << " en ecriture" << std::endl;
@@ -104,13 +134,13 @@ namespace hn::tools
 		if (res != CURLE_OK)
 		{
 			std::cerr << "Erreur curl: " << curl_easy_strerror(res) << std::endl;
-			std::remove(destPath); // nettoie le fichier partiel/corrompu
+			std::filesystem::remove(destPath);
 			return -3;
 		}
 		if (httpCode != 200)
 		{
 			std::cerr << "Erreur HTTP " << httpCode << " pour " << downloadUrl << std::endl;
-			std::remove(destPath);
+			std::filesystem::remove(destPath);
 			return -4;
 		}
 

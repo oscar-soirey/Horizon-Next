@@ -16,11 +16,11 @@
 #include "tools/network/access_repo.h"
 
 
+#define DEBUG printf("%d\n", __LINE__)
 
 int main()
 {
-	hn::Engine engine("default_engine.ini", true, nullptr);
-
+	hn::Engine engine("default_engine.ini", true, true, nullptr, nullptr);
 
 	std::cout << hn::GetEngineVersion() << std::endl;
 
@@ -36,8 +36,7 @@ int main()
 	auto entries = hn::tools::FetchPluginManifest("https://raw.githubusercontent.com/oscar-soirey/Horizon-Next/main/registry/plugin-registry.json");
 	for (const auto& e: entries)
 	{
-		std::cout << e.name << std::endl;
-		hn::tools::DownloadPlugin(e.downloadUrl.c_str(), "Downloads");
+		hn::tools::DownloadPlugin(e.downloadUrl.c_str(), "S:/Horizon/game_engine/3.0/example/package");
 	}
 
 	engine.CreateLevel("scene.xml");

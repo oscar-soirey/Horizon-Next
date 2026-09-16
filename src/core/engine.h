@@ -28,6 +28,20 @@ namespace hn
 
 	namespace Private { class SysModule; }
 
+
+	class ENGINE_API LoopListener {
+	public:
+		LoopListener()=default;
+		virtual ~LoopListener()=default;
+		void SetEnginePointer(Engine* engine) { engine_ = engine; }
+
+		virtual void ExecuteLoop(double dt){}
+
+	protected:
+		Engine* engine_=nullptr;
+	};
+
+
 	class ENGINE_API Logger {
 	public:
 		Logger()=default;
@@ -37,7 +51,7 @@ namespace hn
 		//Do not call cout of printf within this function!
 		virtual void RedirectMessages(const std::string& buffer){}
 
-	private:
+	protected:
 		Engine* engine_=nullptr;
 	};
 
@@ -48,10 +62,13 @@ namespace hn
 		friend class ::OgreLogRedirector;
 
 	public:
-		Engine(const char* configuration_file, bool editor, Logger* logger=nullptr);
+		Engine(const char* configuration_file, bool editor, bool create_window, Logger* logger=nullptr, LoopListener* loop_listener=nullptr);
 		~Engine();
 
+		//Handle engines own loop (with automatic input and window manage)
 		void StartMainLoop();
+		//Render only one frame (rendering, physics, logic, ...)
+		void ProgressOneFrame(double dt);
 
 		void StartGame();
 		void EndGame();
@@ -91,6 +108,7 @@ namespace hn
 
 	private:
 		bool using_editor_=false;
+		bool has_window_=false;
 		bool game_tick_enabled_=false;
 
 		double current_delta_time_=1.f;
@@ -107,6 +125,9 @@ namespace hn
 		PrintfInterceptor* printfbuf=nullptr;
 		std::streambuf* default_cout_buf_=nullptr;
 		Logger* logger_=nullptr;
+
+		//Loop
+		LoopListener* loop_listener_=nullptr;
 
 		//scripting
 		LuaVM* lua_vm_=nullptr;
