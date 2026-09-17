@@ -62,7 +62,7 @@ namespace hn
 		friend class ::OgreLogRedirector;
 
 	public:
-		Engine(const char* configuration_file, bool editor, bool create_window, Logger* logger=nullptr, LoopListener* loop_listener=nullptr);
+		Engine(const char* configuration_file, bool editor, bool create_window, Logger* logger=nullptr, LoopListener* loop_listener=nullptr, void* editor_main_window=nullptr);
 		~Engine();
 
 		//Handle engines own loop (with automatic input and window manage)

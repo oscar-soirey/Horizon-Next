@@ -22,6 +22,7 @@
 #include <Bites/OgreTrays.h>
 #include <OgreWindowEventUtilities.h>
 
+#include "plugins/EngineInfos.h"
 
 
 #define DEBUG printf("%d\n", __LINE__)
@@ -65,7 +66,7 @@ namespace hn
 	}
 
 
-	Engine::Engine(const char *configuration_file, bool editor, bool create_window, Logger* logger, LoopListener* loop_listener): using_editor_(editor), has_window_(create_window)
+	Engine::Engine(const char *configuration_file, bool editor, bool create_window, Logger* logger, LoopListener* loop_listener, void* editor_main_window): using_editor_(editor), has_window_(create_window)
 	{
 		//Init log.h
 		InitLog(this);
@@ -172,9 +173,10 @@ namespace hn
 		printf("Calling plugin functions...\n");
 
 
+		EngineInfos engine_infos(rendering_backend_, editor_main_window);
 		for (const auto& [n, p]: plugins_)
 		{
-			p->sys_plugin->GetPlugin()->Init(nullptr);
+			p->sys_plugin->GetPlugin()->Init(&engine_infos);
 		}
 
 		printf("Plugins OK. Engine init OK\n");

@@ -1,47 +1,45 @@
 #include <iostream>
+#include <qcoreapplication.h>
 
 #include "common.h"
+#include "core/engine.h"
 #include "ui/application.h"
-#include "ui/main_window.h"
-#include "ui/title_bar.h"
+#include "window/main_window.h"
 #include "widgets/viewport.h"
 
 
-class SettingsWindow : public QWidget
-{
+class EditorLogger : public hn::Logger {
 public:
-	explicit SettingsWindow(QWidget *parent = nullptr)
-			: QWidget(parent)
+	void RedirectMessages(const std::string &buffer) override
 	{
-		setWindowTitle("Settings");
-		resize(500, 400);
-
-		auto *layout = new QVBoxLayout(this);
-
-		layout->addWidget(new QLabel("Settings"));
+		hn::editor::GetApplication()->AppendMessage(buffer.c_str());
 	}
 };
 
 
 int main(int argc, char *argv[])
 {
-	hn::editor::EditorApplication(argc, argv);
+	auto* app = new hn::editor::EditorApplication(argc, argv);
+	hn::editor::InitSetEditorApplication(app);
 
 	auto* main_window = new hn::editor::EditorMain();
 	hn::editor::InitSetMainWindow(main_window);
 
-	hn::editor::GetMainWindow()->GetTabWidget()->addTab(
-		new hn::editor::ViewportWidget(),
-		"Main editor"
-	);
-
-
 	hn::editor::GetMainWindow()->show();
+
+
+	auto* editor_logger = new EditorLogger();
+	hn::Engine engine("jfiz", true, true, editor_logger, nullptr, hn::editor::GetMainWindow());
+
 
 	while (!hn::editor::GetMainWindow()->ShouldClose())
 	{
 		QCoreApplication::processEvents();
+		engine.ProgressOneFrame(0.001);
 	}
+
+	delete main_window;
+	delete app;
 
 	return 0;
 }

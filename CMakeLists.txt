@@ -3,7 +3,7 @@ project(horizon-next
 		LANGUAGES C CXX
 )
 
-set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_CONFIGURATION_TYPES Release CACHE STRING "" FORCE)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -49,6 +49,14 @@ list(REMOVE_ITEM LUA_SOURCE
 		"${CMAKE_SOURCE_DIR}/third-party/lua/lua.c"
 		"${CMAKE_SOURCE_DIR}/third-party/lua/luac.c"
 )
+
+
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(KDDockWidgets-Qt6 REQUIRED)
+
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
 
 
 # ============================================================
@@ -129,27 +137,6 @@ target_compile_definitions(horizon-next
 )
 
 
-# ============================================================
-# PLUGINS
-# ============================================================
-
-
-# FBX IMPORTER ===============================================
-add_library(fbx-importer SHARED
-		src-plugins/fbx-importer/fbx_importer.cpp
-)
-
-target_link_libraries(fbx-importer
-	PRIVATE
-		horizon-next
-)
-
-set_target_properties(fbx-importer PROPERTIES
-		RUNTIME_OUTPUT_DIRECTORY
-		"${CMAKE_BINARY_DIR}/Plugins/Import/FbxImporter"
-)
-
-
 
 # ============================================================
 # GAME EXAMPLE SYMBOLS
@@ -191,21 +178,38 @@ add_custom_command(TARGET game POST_BUILD
 # ============================================================
 # EDITOR EXECUTABLE
 # ============================================================
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
-find_package(KDDockWidgets-Qt6 REQUIRED)
-
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTOUIC ON)
-set(CMAKE_AUTORCC ON)
-
-
 add_executable(editor
 		src/editor/main.cpp
 		src/editor/common.cpp
 		src/editor/ui/application.cpp
-		src/editor/ui/main_window.cpp
+		src/editor/ui/editor_window.cpp
 		src/editor/ui/title_bar.cpp
 		src/editor/widgets/viewport.cpp
+		src/editor/widgets/console.cpp
+		src/editor/tabs/window_tab.cpp
+		src/editor/tabs/main_tab.cpp
+		src/editor/window/main_window.cpp
+		src/editor/window/editor_settings.cpp
+		src/editor/window/setting_sections/general.cpp
+		src/editor/utils/editor_dispatcher.cpp
+		src/editor/window/plugin/download_plugin_window.cpp
+		src/editor/window/plugin/plugin_widget.cpp
+)
+
+set_target_properties(editor PROPERTIES
+		ENABLE_EXPORTS TRUE
+)
+target_compile_definitions(editor PRIVATE
+		EDITOR_BUILD
+)
+
+if (WIN32)
+	target_sources(editor PRIVATE
+			icon.rc
+	)
+endif()
+set_target_properties(editor PROPERTIES
+		OUTPUT_NAME "Horizon-Next-2026.0.1"
 )
 
 target_link_libraries(editor
@@ -222,6 +226,33 @@ add_custom_command(TARGET editor POST_BUILD
 		$<TARGET_RUNTIME_DLLS:editor>
 		$<TARGET_FILE_DIR:editor>
 		COMMAND_EXPAND_LISTS
+)
+
+
+
+# ============================================================
+# PLUGINS
+# ============================================================
+
+
+# FBX IMPORTER ===============================================
+add_library(fbx-importer SHARED
+		src-plugins/fbx-importer/fbx_importer.cpp
+)
+
+target_link_libraries(fbx-importer
+		PRIVATE
+		Qt6::Core
+		Qt6::Gui
+		Qt6::Widgets
+		KDAB::kddockwidgets
+		horizon-next
+		editor
+)
+
+set_target_properties(fbx-importer PROPERTIES
+		RUNTIME_OUTPUT_DIRECTORY
+		"${CMAKE_BINARY_DIR}/Plugins/Import/Fbx Importer"
 )
 
 
@@ -267,9 +298,9 @@ add_custom_command(TARGET horizon-next POST_BUILD
 
 add_custom_command(TARGET fbx-importer POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E make_directory
-		"$<TARGET_FILE_DIR:example-game>/Plugins/Import/FBXImporter"
+		"$<TARGET_FILE_DIR:example-game>/Plugins/Import/FBX Importer"
 
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different
 		"$<TARGET_FILE:fbx-importer>"
-		"$<TARGET_FILE_DIR:example-game>/Plugins/Import/FBXImporter"
+		"$<TARGET_FILE_DIR:example-game>/Plugins/Import/FBX Importer"
 )

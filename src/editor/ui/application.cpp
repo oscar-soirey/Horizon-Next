@@ -37,4 +37,15 @@ namespace hn::editor
 	{
 		return app_;
 	}
+
+	std::string EditorApplication::GetFullMessageConsole()
+	{
+		return app_messages_;
+	}
+
+	void EditorApplication::AppendMessage(const char *msg)
+	{
+		app_messages_.append(std::string(msg) + '\n');
+		ED_MessageReceived.Call();
+	}
 }

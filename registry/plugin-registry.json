@@ -2,7 +2,7 @@
   "version": "2026.1.0 beta",
   "plugins": [
     {
-      "name": "FBX-Importer",
+      "name": "FBX Importer",
       "category": "Import",
       "description": "Import fbx files and convert to .mesh file.",
       "author": "Horizon",
@@ -11,12 +11,21 @@
       "sha256": ""
     },
     {
-      "name": "ImGui debugger",
+      "name": "ImGui Debugger",
       "category": "Debug",
       "description": "Use ImGui with C++ interface to in game debug.",
       "author": "Horizon",
       "download_url": "https://github.com/toi/hn-plugins/releases/download/audio-2.0.0/AudioFMOD.dll",
       "version": "2.0",
+      "sha256": ""
+    },
+    {
+      "name": "Spotify Integration",
+      "category": "Other",
+      "description": "Use ImGui with C++ interface to in game debug.",
+      "author": "Horizon",
+      "download_url": "https://github.com/toi/hn-plugins/releases/download/audio-2.0.0/AudioFMOD.dll",
+      "version": "0.1",
       "sha256": ""
     }
   ]

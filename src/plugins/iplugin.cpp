@@ -1,5 +1,7 @@
 #include "iplugin.h"
 
+#include "EngineInfos.h"
+
 namespace hn
 {
 	class EditorWindow{};
