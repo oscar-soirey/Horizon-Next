@@ -90,61 +90,75 @@ namespace hn::tools
 
 	int DownloadPlugin(const char* downloadUrl, const char* destDir)
 	{
-		// Construit le chemin complet : dossier + nom de fichier extrait de l'URL
-		std::string fileName = ExtractFileNameFromUrl(downloadUrl);
-		if (fileName.empty())
-		{
-			std::cerr << "Erreur: impossible d'extraire le nom de fichier depuis l'URL" << std::endl;
-			return -5;
-		}
+	// Construit le chemin complet : dossier + nom de fichier extrait de l'URL
+	std::string fileName = ExtractFileNameFromUrl(downloadUrl);
+	if (fileName.empty())
+	{
+		std::cerr << "Erreur: impossible d'extraire le nom de fichier depuis l'URL" << std::endl;
+		return -5;
+	}
 
-		std::filesystem::path destPath = std::filesystem::path(destDir) / fileName;
+	std::filesystem::path destPath = std::filesystem::path(destDir) / fileName;
 
-		// Cree le dossier de destination s'il n'existe pas
-		std::filesystem::create_directories(destDir);
+	// Note si le dossier de destination existait deja avant cet appel,
+	// pour savoir si on peut le supprimer entierement en cas d'echec
+	const bool destDirExistedBefore = std::filesystem::exists(destDir);
 
-		CURL* curl = curl_easy_init();
-		if (!curl)
-		{
-			std::cerr << "Erreur: impossible d'initialiser curl" << std::endl;
-			return -1;
-		}
+	// Cree le dossier de destination s'il n'existe pas
+	std::filesystem::create_directories(destDir);
 
-		FILE* fp = fopen(destPath.string().c_str(), "wb");
-		if (!fp)
-		{
-			std::cerr << "Erreur: impossible d'ouvrir " << destPath << " en ecriture" << std::endl;
-			curl_easy_cleanup(curl);
-			return -2;
-		}
+	CURL* curl = curl_easy_init();
+	if (!curl)
+	{
+		std::cerr << "Erreur: impossible d'initialiser curl" << std::endl;
+		if (!destDirExistedBefore)
+			std::filesystem::remove_all(destDir);
+		return -1;
+	}
 
-		curl_easy_setopt(curl, CURLOPT_URL, downloadUrl);
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nullptr); // fwrite par defaut
-		curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
-		curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L); // indispensable pour /releases/download/
-		curl_easy_setopt(curl, CURLOPT_USERAGENT, "hn-engine-editor");
-
-		CURLcode res = curl_easy_perform(curl);
-		long httpCode = 0;
-		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-
-		fclose(fp);
+	FILE* fp = fopen(destPath.string().c_str(), "wb");
+	if (!fp)
+	{
+		std::cerr << "Erreur: impossible d'ouvrir " << destPath << " en ecriture" << std::endl;
 		curl_easy_cleanup(curl);
+		if (!destDirExistedBefore)
+			std::filesystem::remove_all(destDir);
+		return -2;
+	}
 
-		if (res != CURLE_OK)
-		{
-			std::cerr << "Erreur curl: " << curl_easy_strerror(res) << std::endl;
-			std::filesystem::remove(destPath);
-			return -3;
-		}
-		if (httpCode != 200)
-		{
-			std::cerr << "Erreur HTTP " << httpCode << " pour " << downloadUrl << std::endl;
-			std::filesystem::remove(destPath);
-			return -4;
-		}
+	curl_easy_setopt(curl, CURLOPT_URL, downloadUrl);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nullptr); // fwrite par defaut
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L); // indispensable pour /releases/download/
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, "hn-engine-editor");
 
-		return 0; // succes
+	CURLcode res = curl_easy_perform(curl);
+	long httpCode = 0;
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+	fclose(fp);
+	curl_easy_cleanup(curl);
+
+	if (res != CURLE_OK)
+	{
+		std::cerr << "Erreur curl: " << curl_easy_strerror(res) << std::endl;
+		if (destDirExistedBefore)
+			std::filesystem::remove(destPath);
+		else
+			std::filesystem::remove_all(destDir);
+		return -3;
+	}
+	if (httpCode != 200)
+	{
+		std::cerr << "Erreur HTTP " << httpCode << " pour " << downloadUrl << std::endl;
+		if (destDirExistedBefore)
+			std::filesystem::remove(destPath);
+		else
+			std::filesystem::remove_all(destDir);
+		return -4;
+	}
+
+	return 0; // succes
 	}
 
 }

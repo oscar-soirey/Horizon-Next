@@ -1,1 +1,265 @@
-Horizon-Next 2026.0.1 beta
+<html><head><style>body {
+   color: black;
+}
+</style></head><body><h1 id="horizon-next-technical-documentation">Horizon-Next — Technical Documentation</h1>
+<p><strong>Version: 2026.1.0 Beta</strong></p>
+<p>Horizon-Next (namespace <code>hn::</code>) is a custom C++20 game engine, built on top of Ogre3D for rendering, a 3D physics backend, and Lua for scripting. It exposes a stable API through a DLL (<code>ENGINE_API</code>), an Actor/Component system, a lightweight reflection layer, a dynamically-loaded plugin system, and a module system that lets a game register its gameplay classes without recompiling the engine.</p>
+<p>This document presents the engine&#39;s internal architecture as it exists in the source code, module by module.</p>
+<hr>
+<h2 id="1-architecture-overview">1. Architecture overview</h2>
+<pre><code>hn<span class="hljs-type">::Engine</span>                 → entry point, orchestrates everything (rendering, plugins, Lua, logs)
+ ├── rendering_interface    → Ogre3D backend (<span class="hljs-keyword">private</span>, internal <span class="hljs-keyword">to</span> engine.cpp)
+ ├── hn<span class="hljs-type">::LuaVM</span>               → embedded Lua VM
+ ├── hn<span class="hljs-type">::Logger</span>               → extensible logging system
+ ├── hn<span class="hljs-type">::Private</span><span class="hljs-type">::SysPlugin</span>   → dynamic plugin loading (.dll)
+ └── hge<span class="hljs-type">::HGE_Level</span>            → current level, holds the Actors
+
+hge<span class="hljs-type">::HGE_Object</span>              → base class for every reflectable entity (properties)
+ └── hge<span class="hljs-type">::HGE_Actor</span>            → world object (transform, physics, components)
+      ├── hge<span class="hljs-type">::HGE_Character</span>    → actor <span class="hljs-keyword">with</span> character movement/physics
+      └── hge<span class="hljs-type">::HGE_Component</span> (composed, <span class="hljs-literal">not</span> <span class="hljs-built_in">inherited</span>)
+           ├── hge<span class="hljs-type">::HGE_SceneComponent</span> → component <span class="hljs-keyword">with</span> a relative transform
+           │    ├── hge<span class="hljs-type">::HGE_Camera</span>
+           │    ├── hge<span class="hljs-type">::HGE_Light</span>
+           │    ├── hge<span class="hljs-type">::HGE_Sprite</span>
+           │    └── hge<span class="hljs-type">::HGE_Shape</span> (base class for collision shapes)
+           │         ├── Box, Capsule, Circle
+</code></pre><p>Two namespaces coexist:</p>
+<ul>
+<li><strong><code>hn::</code></strong> — the engine itself: <code>Engine</code>, <code>Logger</code>, <code>LuaVM</code>, the plugin/module system, filesystem, ini parser.</li>
+<li><strong><code>hge::</code></strong> — the gameplay framework exposed to games: <code>HGE_Object</code>, <code>HGE_Actor</code>, <code>HGE_Level</code>, components, input, player controller.</li>
+</ul>
+<hr>
+<h2 id="2-the-core-hn-engine-">2. The core: <code>hn::Engine</code></h2>
+<p>Defined in <code>src/core/engine.h</code> / <code>engine.cpp</code>. This is the central class, non-copyable, instantiated once in <code>main()</code>.</p>
+<pre><code class="lang-cpp">hn::<span class="hljs-function">Engine <span class="hljs-title">engine</span><span class="hljs-params">(<span class="hljs-string">"default_engine.ini"</span>, <span class="hljs-comment">/*editor=*/</span><span class="hljs-literal">true</span>, <span class="hljs-comment">/*logger=*/</span><span class="hljs-literal">nullptr</span>)</span></span>;
+engine.StartMainLoop();
+</code></pre>
+<h3 id="responsibilities">Responsibilities</h3>
+<ul>
+<li><strong>Log initialization</strong> (<code>InitLog</code>), intercepting <code>std::cout</code> through <code>EngineStreambuf</code>.</li>
+<li><strong>Filesystem initialization</strong> (<code>InitFilesystem</code>) — raw files or a packaged archive, depending on editor mode.</li>
+<li><strong>Configuration loading</strong> via <code>HN_Ini</code> (an <code>.ini</code> file, e.g. <code>default_engine.ini</code>).</li>
+<li><strong>Rendering backend initialization</strong> (<code>rendering_interface</code>, private to <code>engine.cpp</code>): creates the Ogre context (<code>OgreBites::ApplicationContext</code>), the <code>Ogre::Root</code>, the <code>SceneManager</code>, the overlay system, and a <code>TrayManager</code> for debug/viewport UI.</li>
+<li><strong>Lua VM initialization</strong> (<code>LuaVM</code>) and registration of the standard functions.</li>
+<li><strong>Plugin loading</strong>: scans the <code>Plugins/&lt;category&gt;/&lt;name&gt;/*.dll</code> folder, loads each valid DLL through <code>Private::SysPlugin</code>, and calls <code>Init()</code> on every plugin.</li>
+<li><strong>Main loop</strong> (<code>StartMainLoop</code>): delegates rendering to <code>Ogre::Root::startRendering()</code>. Per-frame tick logic lives in <code>HNFrameListener::frameStarted</code> (internal to <code>engine.cpp</code>): updates the Lua VM, the actors (<code>Update</code> always, <code>Tick</code> only if <code>game_tick_enabled_</code>), the plugins, and clears expired viewport messages.</li>
+</ul>
+<h3 id="main-public-api">Main public API</h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>StartGame()</code> / <code>EndGame()</code></td>
+<td>Enables/disables gameplay simulation (<code>game_tick_enabled_</code>), calls <code>StartGame</code>/<code>EndGame</code> on every actor of the current level</td>
+</tr>
+<tr>
+<td><code>OpenLevel(HGE_Level*)</code> / <code>UnloadCurrentLevel()</code></td>
+<td>Switches the current level (destroys the previous one)</td>
+</tr>
+<tr>
+<td><code>GetDeltaTime()</code></td>
+<td>Delta time of the current frame</td>
+</tr>
+<tr>
+<td><code>GetRenderingBackend()</code></td>
+<td>Opaque pointer (<code>void*</code>) to <code>rendering_interface</code>, used internally by rendering components</td>
+</tr>
+<tr>
+<td><code>SetCustomLoggerSubsystem(Logger*)</code> / <code>Log(...)</code></td>
+<td>Pluggable logging system</td>
+</tr>
+<tr>
+<td><code>GetLuaVM()</code></td>
+<td>Access to the Lua VM</td>
+</tr>
+<tr>
+<td><code>hn::GetEngineVersion()</code></td>
+<td>Returns the version string (<code>ENGINE_VERSION_STR</code>, defined in CMake)</td>
+</tr>
+</tbody>
+</table>
+<p>Rendering, plugins, and Lua are all cleanly torn down in <code>Engine</code>&#39;s destructor.</p>
+<hr>
+<h2 id="3-object-and-reflection-system-hge-hge_object-">3. Object and reflection system: <code>hge::HGE_Object</code></h2>
+<p>Defined in <code>src/core/object.h</code>. This is the base class for <strong>every</strong> entity in the engine (Actors and Components both derive from it indirectly).</p>
+<h3 id="lifecycle">Lifecycle</h3>
+<pre><code class="lang-cpp"><span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">Init</span><span class="hljs-params">()</span></span>;
+<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">StartGame</span><span class="hljs-params">()</span></span>;  <span class="hljs-comment">// start of gameplay simulation</span>
+<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">EndGame</span><span class="hljs-params">()</span></span>;    <span class="hljs-comment">// end of gameplay simulation</span>
+<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">Tick</span><span class="hljs-params">(<span class="hljs-keyword">double</span> dt)</span></span>;    <span class="hljs-comment">// gameplay only</span>
+<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">Update</span><span class="hljs-params">(<span class="hljs-keyword">double</span> dt)</span></span>;  <span class="hljs-comment">// every frame, even outside simulation</span>
+</code></pre>
+<h3 id="reflection-properties-">Reflection (properties)</h3>
+<p>Every object owns an <code>ordered_map&lt;std::string, HGE_Property&gt;</code> that maps a name to a typed pointer (<code>std::variant</code> of <code>int*, float*, bool*, std::string*, HGE_Vec2*, HGE_Vec3*, HGE_Vec4*, HGE_Transform*, HGE_Path*</code>). A property can be <code>Exposed</code> (external read/write, e.g. editor) or <code>Editable</code>.</p>
+<p>The <code>HPROPERTY</code> macro declares a reflectable property and attaches it to an <code>Observable</code>, which fires a callback whenever the value changes (checked every <code>Tick</code>):</p>
+<pre><code class="lang-cpp">HPROPERTY(<span class="hljs-name">life</span>, hge:<span class="hljs-symbol">:Exposed</span>)<span class="hljs-comment">;</span>
+</code></pre>
+<p>Generic accessors:</p>
+<pre><code class="lang-cpp"><span class="hljs-function">T <span class="hljs-title">GetPropertyValue</span><span class="hljs-params">(<span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name)</span></span>;
+<span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">SetPropertyValue</span><span class="hljs-params">(<span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name, T val)</span></span>;
+<span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">SetPropertyValueStr</span><span class="hljs-params">(<span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name, <span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* val)</span></span>; <span class="hljs-comment">// string → typed conversion</span>
+<span class="hljs-function"><span class="hljs-keyword">bool</span> <span class="hljs-title">PropertyExists</span><span class="hljs-params">(<span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name)</span></span>;
+</code></pre>
+<hr>
+<h2 id="4-actors-and-levels">4. Actors and levels</h2>
+<h3 id="-hge-hge_actor-src-core-actor-h-"><code>hge::HGE_Actor</code> (<code>src/core/actor.h</code>)</h3>
+<p>An <code>HGE_Actor</code> is a world <code>HGE_Object</code>: a transform (<code>HGE_Transform transform</code>), a physics mode (<code>NONE/STATIC/DYNAMIC/KINEMATIC</code>, backed internally by an opaque physics handle), and a collection of components (<code>std::unordered_map&lt;std::string, std::unique_ptr&lt;HGE_Component&gt;&gt;</code>).</p>
+<p>Components are added via:</p>
+<pre><code class="lang-cpp"><span class="hljs-function">HGE_Component* <span class="hljs-title">AddComponent</span><span class="hljs-params">(<span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name, ctor)</span></span>;
+<span class="hljs-comment">// or through the convenience macro:</span>
+HCOMPONENT(<span class="hljs-string">"Sprite"</span>, HGE_Sprite);
+</code></pre>
+<p>Exposed events (<code>HEventDispatcher</code>): <code>ED_transform_modified</code>, <code>ED_physics_mode_changed</code>, <code>ED_possess_state_changed</code> (with <code>OnPossessed(int)</code> / <code>OnUnpossessed(int)</code> for multiplayer handling).</p>
+<h3 id="-hge-hge_character-src-core-character-h-"><code>hge::HGE_Character</code> (<code>src/core/character.h</code>)</h3>
+<p>A specialization of <code>HGE_Actor</code> with character-style movement (platformer): gravity, max fall velocity, jump force, max horizontal velocity, ground/ceiling detection (<code>grounded_</code>, <code>on_ceiling_</code>), with <code>Jump()</code> and <code>MoveX(float)</code>. Internally uses a capsule shape component as its collider.</p>
+<h3 id="-hge-hge_level-src-core-level-h-"><code>hge::HGE_Level</code> (<code>src/core/level.h</code>)</h3>
+<p>A container of actors. <code>LoadFromFile(path)</code> loads a scene (XML format, via tinyxml2, linked in the CMake build). <code>SpawnActor(className)</code> instantiates an actor registered in the gameplay factory. <code>GetActors()</code>, <code>GetActorFromID(id)</code>, <code>CountActorsOfClass(...)</code>.</p>
+<hr>
+<h2 id="5-component-system">5. Component system</h2>
+<p>Base class: <code>hge::HGE_Component</code> (<code>src/components/base_component.h</code>) — an <code>HGE_Object</code> owned by an <code>HGE_Actor</code> (<code>parent_</code>). <code>Init()</code> is locked there (<code>final {}</code>): all logic goes through the constructor instead.</p>
+<p><code>hge::HGE_SceneComponent</code> adds a <code>relative_transform</code> and absolute-transform accessors (<code>GetAbsoluteTransform/Location/Rotation/Scale</code>), with a <code>TransformModified()</code> virtual hook.</p>
+<p>Concrete components available:</p>
+<ul>
+<li><strong><code>HGE_Camera</code></strong> (<code>camera.h</code>) — <code>Perspective</code>/<code>Orthographic</code>, <code>fov_ortho_height</code>, rendering backend hidden behind <code>BackendCamera*</code>.</li>
+<li><strong><code>HGE_Light</code></strong> (<code>light.h</code>) — color, attenuation, intensity, each with its own <code>*Modified()</code> callback.</li>
+<li><strong><code>HGE_Sprite</code></strong> (<code>sprite.h</code>) — a <code>material</code> (string), hidden rendering backend.</li>
+<li><strong><code>HGE_Shape</code></strong> (<code>shapes/shape.h</code>) — base class for collision shapes (density, friction, bounciness, and contact-event toggling). Concrete subclasses: <code>HGE_ShapeBox</code>, <code>HGE_ShapeCapsule</code>, <code>HGE_ShapeCircle</code>.</li>
+</ul>
+<hr>
+<h2 id="6-event-system-and-reactive-data">6. Event system and reactive data</h2>
+<ul>
+<li><strong><code>hge::HEventDispatcher&lt;Args...&gt;</code></strong> (<code>data/event_dispatcher.h</code>) — a minimal pub/sub: <code>Subscribe(fn) → id</code>, <code>Unsubscribe(id)</code>, <code>Call(args...)</code>. Used for all internal Actor/Component events.</li>
+<li><strong><code>Observable&lt;T&gt;</code> / <code>IObservable</code></strong> (<code>data/observable.h</code>) — wraps a reference and runs a callback whenever the value changes between two calls to <code>Tick()</code>. This is the mechanism behind <code>HPROPERTY</code>.</li>
+<li><strong><code>hn::HN_Ini</code></strong> (<code>data/ini_parser.h</code>) — a templated <code>.ini</code> file parser (<code>Get&lt;T&gt;</code>, <code>GetEntries&lt;T&gt;</code>, <code>SetKeyValue&lt;T&gt;</code>, <code>SaveIniFile()</code>), based on <code>inih</code> (third-party).</li>
+<li><strong><code>ordered_map</code></strong> (<code>data/ordered_map.h</code>) — an insertion-order-preserving map, used for properties (likely to keep a stable display order in an editor).</li>
+</ul>
+<hr>
+<h2 id="7-module-system-a-game-s-gameplay-code-">7. Module system (a game&#39;s gameplay code)</h2>
+<p>A <strong>module</strong> is a game DLL that registers its gameplay classes (custom <code>HGE_Object</code>s, typically <code>HGE_Actor</code>s) into the engine&#39;s global factory, so that <code>HGE_Level::SpawnActor(&quot;MyClass&quot;)</code> can instantiate them by name.</p>
+<pre><code class="lang-cpp"><span class="hljs-comment">// game/src/module.cpp</span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">include</span> <span class="hljs-string">"player.h"</span></span>
+<span class="hljs-meta">#<span class="hljs-meta-keyword">include</span> <span class="hljs-string">"../../src/modules/module.h"</span></span>
+
+HGE_LINK_MODULE
+(
+    HGE_MODULE_REGISTER(Player);
+)
+</code></pre>
+<ul>
+<li><code>HGE_MODULE_REGISTER(Class)</code> adds <code>{&quot;Class&quot;, []() { return new Class(); }}</code> to a local factory.</li>
+<li><code>HGE_LINK_MODULE(...)</code> generates the exported symbols <code>FactoryRegisterClasses</code> / <code>FactoryUnregisterClasses</code> (<code>__declspec(dllexport)</code>), called by the engine through <code>hn::Private::SysModule</code> (<code>modules/Private/SystemModule.h</code>), which loads the DLL and dynamically resolves both symbols.</li>
+</ul>
+<p>Minimal example of a gameplay class (<code>game/src/player.h</code>):</p>
+<pre><code class="lang-cpp"><span class="hljs-keyword">class</span> Player : <span class="hljs-keyword">public</span> hge::HGE_Actor {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">int</span> life = <span class="hljs-number">100</span>;
+    hge::InputAction jump_action = <span class="hljs-string">"jump"</span>;
+    hge::InputAxis1D move_forward = <span class="hljs-string">"move_x"</span>;
+
+    Player() { HPROPERTY(life, hge::Exposed); }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">ProcessInput</span><span class="hljs-params">(<span class="hljs-keyword">double</span> dt)</span> override </span>{
+        <span class="hljs-keyword">if</span> (jump_action.IsPressed()) { <span class="hljs-comment">/* ... */</span> }
+        move_forward.GetValue();
+    }
+};
+</code></pre>
+<hr>
+<h2 id="8-plugin-system-engine-extensions-">8. Plugin system (engine extensions)</h2>
+<p>Different from modules: a <strong>plugin</strong> extends the <em>engine</em> itself (e.g. an FBX importer), not a specific game&#39;s gameplay. Interface: <code>hn::IPlugin</code> (<code>src/plugins/iplugin.h</code>):</p>
+<pre><code class="lang-cpp"><span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">Init</span><span class="hljs-params">(EngineInfos*)</span></span>;
+<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">Tick</span><span class="hljs-params">(<span class="hljs-keyword">double</span> dt)</span></span>;
+<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">StartGame</span><span class="hljs-params">()</span></span>; <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">GameTick</span><span class="hljs-params">(<span class="hljs-keyword">double</span> dt)</span></span>; <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">EndGame</span><span class="hljs-params">()</span></span>;
+<span class="hljs-comment">// editor hooks:</span>
+<span class="hljs-keyword">virtual</span> <span class="hljs-built_in">std</span>::<span class="hljs-built_in">unordered_map</span>&lt;<span class="hljs-built_in">std</span>::<span class="hljs-built_in">string</span>, EditorWindow&gt; HandleWindow();
+<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">HandleTitleBar</span><span class="hljs-params">()</span></span>;
+<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">HandleToolbar</span><span class="hljs-params">()</span></span>;
+</code></pre>
+<p>A plugin is exported with the <code>HORIZON_PLUGIN(PluginClass)</code> macro, which generates a <code>LoadPlugin()</code> entry point. The engine loads it via <code>hn::Private::SysPlugin</code>, scanning <code>Plugins/&lt;category&gt;/&lt;name&gt;/*.dll</code> at startup (see §2). A plugin must be compiled against the <strong>same engine version</strong>, otherwise it&#39;s rejected at load time.</p>
+<p>Example included: <code>src-plugins/fbx-importer</code> — a skeleton FBX import plugin (<code>FBXImporter : IPlugin</code>), built and automatically copied into <code>Plugins/Import/FBXImporter/</code> by the CMake build.</p>
+<hr>
+<h2 id="9-lua-scripting">9. Lua scripting</h2>
+<p><code>hn::LuaVM</code> (<code>src/scripting/lua_vm.h</code>) embeds a Lua VM (headers under <code>third-party/lua</code>, statically linked into <code>horizon-next</code>).</p>
+<ul>
+<li><code>RegisterHNStdFunctions()</code> — registers the engine&#39;s standard functions exposed to Lua (called automatically when the <code>Engine</code> is constructed).</li>
+<li><code>RegisterFunction(name, LuaFunction)</code> — registers an additional C function.</li>
+<li><code>DoFromFile(path)</code> — executes a Lua script.</li>
+<li><code>Update(dt)</code> — called every frame by <code>HNFrameListener</code> to drive a global <code>Update</code> function on the scripting side.</li>
+<li><code>GetScriptStack()</code> — stack of loaded scripts (useful for debugging/reloading).</li>
+</ul>
+<hr>
+<h2 id="10-gameplay-input-and-multiplayer">10. Gameplay: input and multiplayer</h2>
+<ul>
+<li><strong><code>hge::InputAction</code></strong> / <strong><code>hge::InputAxis1D</code></strong> (<code>core/gameplay/input.h</code>) — binary actions (<code>IsPressed/IsHeld/IsReleased</code>) and continuous axes (<code>GetValue()</code>), mapped internally to keys (<code>Private::input_manager</code>).</li>
+<li><strong>Player Controllers</strong> (<code>core/gameplay/player_controller.h</code>) — multiplayer handling: <code>CreatePlayer()/DeletePlayer(pc)</code>, <code>PossessActor(pc, actor)/UnpossessActor(pc)</code>, <code>GetPossessedActor(pc)</code>, per-player viewport (<code>SetPlayerViewportSize</code>, <code>GetPlayerViewportBackend</code>).</li>
+<li>On every simulation frame, <code>PlayerControllersTick(dt)</code> (a friend of <code>HGE_Actor</code>) internally calls <code>ProcessInput</code> on the actor possessed by each controller, before the physics update.</li>
+</ul>
+<hr>
+<h2 id="11-logging">11. Logging</h2>
+<ul>
+<li><strong>Global API</strong> (<code>core/log/log.h</code>): <code>hn::Log(msg, ELog_type, print_to_viewport, viewport_time)</code> and <code>hn::LogViewport(msg, mode)</code>. <code>ELog_type</code> = <code>MSG | WARNING | ERR</code>.</li>
+<li><strong>Extensible class</strong> <code>hn::Logger</code> (in <code>engine.h</code>): overridable (<code>Log()</code>, <code>RedirectMessages()</code>) and injectable via <code>Engine::SetCustomLoggerSubsystem</code>. The default logger prefixes <code>W:</code>/<code>ERR:</code> and can display the message on screen (viewport) through Ogre&#39;s <code>TrayManager</code>, auto-expiring after <code>viewport_time_</code> seconds.</li>
+<li><strong>Console redirection</strong>: <code>EngineStreambuf</code> (intercepts <code>std::cout</code>) and <code>OgreLogRedirector</code> (redirects Ogre&#39;s internal logs into the engine&#39;s own system) — <code>core/log/redirect.h</code>.</li>
+</ul>
+<hr>
+<h2 id="12-filesystem">12. Filesystem</h2>
+<p><code>core/filesystem.h</code>: <code>InitFilesystem(useRawFiles)</code> toggles between raw files (editor mode) and reading from a packaged archive. <code>GetFileContent(path, &amp;outSize, forceRawFile)</code> reads a file regardless of mode, <code>GetParentPath(path)</code> resolves the parent folder.</p>
+<hr>
+<h2 id="13-rendering-backend-ogre3d-">13. Rendering backend (Ogre3D)</h2>
+<p>Internal to <code>engine.cpp</code> (<code>struct rendering_interface</code>, not publicly exposed — reachable only through <code>Engine::GetRenderingBackend()</code> as <code>void*</code>, cast by components that need it). It wraps:</p>
+<ul>
+<li><code>OgreBites::ApplicationContext</code> (window, app init)</li>
+<li><code>Ogre::Root</code> + <code>Ogre::SceneManager</code></li>
+<li><code>Ogre::OverlaySystem</code> (UI overlay)</li>
+<li><code>OgreBites::TrayManager</code> (on-screen debug messages)</li>
+<li>An <code>HNFrameListener</code> that drives the whole tick loop (see §2)</li>
+</ul>
+<p>The rendering backends supported through Ogre (Direct3D11, OpenGL 3+, Vulkan) are listed in <code>api_friendly_names</code>, but the actual backend selection happens through Ogre&#39;s standard configuration, not a dedicated Horizon-Next API.</p>
+<hr>
+<h2 id="14-build-cmake-">14. Build (CMake)</h2>
+<p>The <code>horizon-next</code> project (C11/C++20) builds:</p>
+<ul>
+<li><strong><code>horizon-next</code></strong> — the engine DLL (SHARED), links <code>OgreMain</code> + <code>OgreBites</code>, bundles <code>inih</code> (ini parsing), <code>tinyxml2</code> (XML scenes), and Lua as third-party sources (<code>third-party/</code>).</li>
+<li><strong><code>fbx-importer</code></strong> — the example plugin, copied into <code>Plugins/Import/FBXImporter/</code> next to the executable.</li>
+<li><strong><code>example-game</code></strong> — an example gameplay module DLL (<code>game/src/</code>).</li>
+<li><strong><code>game</code></strong> — the final executable (<code>src/main.cpp</code>), linked against <code>horizon-next</code>. Ogre&#39;s DLLs and media are copied next to the executable automatically as a post-build step.</li>
+</ul>
+<p>The engine version is injected at compile time (<code>ENGINE_VERSION_STR=&quot;Horizon-Next 2026.1.0 beta&quot;</code>), readable at runtime via <code>hn::GetEngineVersion()</code>.</p>
+<p>⚠️ The <code>OGRE_DIR</code> path in <code>CMakeLists.txt</code> is currently hardcoded (<code>S:/Programmation/Libraries/OgreSDK/CMake</code>), as are the paths to the Ogre DLLs/Media copied in the post-build step — these need to be parameterized to build on another machine.</p>
+<hr>
+<h2 id="15-minimal-usage-example">15. Minimal usage example</h2>
+<p>Excerpt from <code>src/main.cpp</code>:</p>
+<pre><code class="lang-cpp">hn::<span class="hljs-function">Engine <span class="hljs-title">engine</span><span class="hljs-params">(<span class="hljs-string">"default_engine.ini"</span>, <span class="hljs-comment">/*editor=*/</span><span class="hljs-literal">true</span>, <span class="hljs-literal">nullptr</span>)</span></span>;
+<span class="hljs-built_in">std</span>::<span class="hljs-built_in">cout</span> &lt;&lt; hn::GetEngineVersion() &lt;&lt; <span class="hljs-built_in">std</span>::<span class="hljs-built_in">endl</span>;
+
+hn::Private::<span class="hljs-function">SysModule <span class="hljs-title">module</span><span class="hljs-params">(<span class="hljs-string">"example-game.dll"</span>)</span></span>;
+<span class="hljs-keyword">module</span>.RegisterFactory();
+
+<span class="hljs-keyword">int</span> pc = hge::CreatePlayer();
+
+hge::HGE_Level lvl{};
+lvl.LoadFromFile(<span class="hljs-string">"scene.xml"</span>);
+
+engine.GetLuaVM()-&gt;DoFromFile(<span class="hljs-string">"script.lua"</span>);
+
+engine.StartMainLoop();
+
+<span class="hljs-keyword">module</span>.UnregisterFactory();
+</code></pre>
+<hr>
+<h2 id="16-points-of-attention-work-in-progress">16. Points of attention / work in progress</h2>
+<ul>
+<li><code>src/core/data/data_table.h</code> is empty (not implemented).</li>
+<li><code>src/core/data/data_enum.h</code> only contains commented-out code (a reflectable enum system, not active yet).</li>
+<li><code>src/editor/main.cpp</code> is empty — the editor hasn&#39;t been started yet.</li>
+<li>Plugin/module loading (<code>.dll</code>) is only implemented for Windows (<code>#ifdef _WIN32</code>); the Linux/macOS branches are empty stubs.</li>
+<li><code>HGE_Level</code>&#39;s commented-out second constructor (<code>LoadFromFile</code> in the constructor) suggests an ongoing rework of the level-loading API.</li>
+</ul>
+</body></html>

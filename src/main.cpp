@@ -20,6 +20,7 @@
 
 int main()
 {
+	DEBUG;
 	hn::Engine engine("default_engine.ini", true, true, nullptr, nullptr);
 
 	std::cout << hn::GetEngineVersion() << std::endl;
@@ -33,16 +34,12 @@ int main()
 	//hn::editor::CompileGame("S:/Documents/CLionProjects/vulkan", 20);
 	//hn::editor::CompileLuaFiles("Assets");
 
-	auto entries = hn::tools::FetchPluginManifest("https://raw.githubusercontent.com/oscar-soirey/Horizon-Next/main/registry/plugin-registry.json");
-	for (const auto& e: entries)
+		DEBUG;
+
+	while (true)
 	{
-		hn::tools::DownloadPlugin(e.downloadUrl.c_str(), "S:/Horizon/game_engine/3.0/example/package");
+		engine.ProgressOneFrame(0.001);
 	}
-
-	engine.CreateLevel("scene.xml");
-
-
-	engine.StartMainLoop();
 
 
 	return 0;

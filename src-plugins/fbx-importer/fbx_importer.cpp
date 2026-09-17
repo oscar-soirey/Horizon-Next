@@ -18,8 +18,11 @@ namespace hn::plugins
 
 	void FBXImporter::Init(EngineInfos *engine_infos)
 	{
-		auto* mainWindow = static_cast<editor::EditorMain*>(engine_infos->editor_main_window);
-		hn::editor::AddSettingSection("FBX Importer", new editor::SettingSection("FBX Importer"));
+		if (engine_infos->editor_main_window)
+		{
+			auto* mainWindow = static_cast<editor::EditorMain*>(engine_infos->editor_main_window);
+			hn::editor::AddSettingSection("FBX Importer", new editor::SettingSection("FBX Importer"));
+		}
 	}
 
 	void FBXImporter::Tick(double dt)

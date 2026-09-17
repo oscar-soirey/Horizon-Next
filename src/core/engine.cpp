@@ -173,7 +173,7 @@ namespace hn
 		printf("Calling plugin functions...\n");
 
 
-		EngineInfos engine_infos(rendering_backend_, editor_main_window);
+		EngineInfos engine_infos(rendering_backend_, editor, editor_main_window);
 		for (const auto& [n, p]: plugins_)
 		{
 			p->sys_plugin->GetPlugin()->Init(&engine_infos);
