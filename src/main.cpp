@@ -20,7 +20,6 @@
 
 int main()
 {
-	DEBUG;
 	hn::Engine engine("default_engine.ini", true, true, nullptr, nullptr);
 
 	std::cout << hn::GetEngineVersion() << std::endl;
@@ -30,16 +29,9 @@ int main()
 
 	int player_controller = hge::CreatePlayer();
 
-	//hn::editor::GenerateProjectFiles("S:/Documents/CLionProjects/vulkan");
-	//hn::editor::CompileGame("S:/Documents/CLionProjects/vulkan", 20);
-	//hn::editor::CompileLuaFiles("Assets");
+	engine.CreateLevel("scene.xml");
 
-		DEBUG;
-
-	while (true)
-	{
-		engine.ProgressOneFrame(0.001);
-	}
+	engine.StartMainLoop();
 
 
 	return 0;
@@ -49,12 +41,6 @@ int main()
 
 
 	/*
-	// without light we would just get a black screen
-	Light* light = scnMgr->createLight("MainLight");
-	SceneNode* lightNode = scnMgr->getRootSceneNode()->createChildSceneNode();
-	lightNode->attachObject(light);
-	lightNode->setPosition(20, 80, 50);
-
 	// also need to tell where we are
 	SceneNode* camNode = scnMgr->getRootSceneNode()->createChildSceneNode();
 

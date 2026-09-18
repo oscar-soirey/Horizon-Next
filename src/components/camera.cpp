@@ -4,11 +4,21 @@
 
 #include "../core/gameplay/player_controller.h"
 
+#include <Ogre.h>
+
+#include "core/engine.h"
+#include "core/Private/EngineRenderingBackend.h"
+
+using namespace Ogre;
+
 struct BackendCamera {
 	//HRL_id cam;
 	hge::Camera_Type_e type;
 	float fov;
 	float ortho_height;
+
+	SceneNode* camNode=nullptr;
+	Camera* cam=nullptr;
 };
 
 
@@ -19,6 +29,18 @@ namespace hge
 		HPROPERTY(fov_ortho_height, Exposed, FovChanged());
 
 		//backend_->cam = HRL_CreateCamera(parent_->BackendGetSceneID(), HRL_PERSPECTIVE);		parent_->ED_transform_modified.Subscribe([this](){ TransformModified(); });
+
+		auto* renderer = (rendering_interface*)_parent->GetEngine()->GetRenderingBackend();
+		backend_->camNode = renderer->scn_mng->getRootSceneNode()->createChildSceneNode();
+
+		// create the camera
+		backend_->cam = renderer->scn_mng->createCamera("myCam");
+		backend_->cam->setNearClipDistance(5); // specific to this sample
+		backend_->cam->setAutoAspectRatio(true);
+		backend_->cam->setFOVy(Degree(70.f));
+		backend_->camNode->attachObject(backend_->cam);
+		backend_->camNode->setPosition(0, 47, 222);
+
 
 		//pareil que avec la propriété type, exposer les propriétés
 		backend_->type = Perspective;

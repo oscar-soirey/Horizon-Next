@@ -1,265 +1,1187 @@
-<html><head><style>body {
-   color: black;
-}
-</style></head><body><h1 id="horizon-next-technical-documentation">Horizon-Next — Technical Documentation</h1>
-<p><strong>Version: 2026.1.0 Beta</strong></p>
-<p>Horizon-Next (namespace <code>hn::</code>) is a custom C++20 game engine, built on top of Ogre3D for rendering, a 3D physics backend, and Lua for scripting. It exposes a stable API through a DLL (<code>ENGINE_API</code>), an Actor/Component system, a lightweight reflection layer, a dynamically-loaded plugin system, and a module system that lets a game register its gameplay classes without recompiling the engine.</p>
-<p>This document presents the engine&#39;s internal architecture as it exists in the source code, module by module.</p>
-<hr>
-<h2 id="1-architecture-overview">1. Architecture overview</h2>
-<pre><code>hn<span class="hljs-type">::Engine</span>                 → entry point, orchestrates everything (rendering, plugins, Lua, logs)
- ├── rendering_interface    → Ogre3D backend (<span class="hljs-keyword">private</span>, internal <span class="hljs-keyword">to</span> engine.cpp)
- ├── hn<span class="hljs-type">::LuaVM</span>               → embedded Lua VM
- ├── hn<span class="hljs-type">::Logger</span>               → extensible logging system
- ├── hn<span class="hljs-type">::Private</span><span class="hljs-type">::SysPlugin</span>   → dynamic plugin loading (.dll)
- └── hge<span class="hljs-type">::HGE_Level</span>            → current level, holds the Actors
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Horizon-Next — C++20 Game Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #EEF2F6;
+    --bg-panel: #FFFFFF;
+    --bg-panel-2: #F5F7FA;
+    --text: #131A26;
+    --muted: #55637A;
+    --accent: #D2600F;
+    --accent-soft: rgba(210, 96, 15, 0.12);
+    --grid: #3B6EA5;
+    --border: #D8DFE7;
+    --code-bg: #101622;
+    --code-text: #DCE3ED;
+    --shadow: 0 1px 2px rgba(20, 30, 45, 0.06);
+    --font-display: 'Space Grotesk', 'Segoe UI', system-ui, sans-serif;
+    --font-body: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  }
 
-hge<span class="hljs-type">::HGE_Object</span>              → base class for every reflectable entity (properties)
- └── hge<span class="hljs-type">::HGE_Actor</span>            → world object (transform, physics, components)
-      ├── hge<span class="hljs-type">::HGE_Character</span>    → actor <span class="hljs-keyword">with</span> character movement/physics
-      └── hge<span class="hljs-type">::HGE_Component</span> (composed, <span class="hljs-literal">not</span> <span class="hljs-built_in">inherited</span>)
-           ├── hge<span class="hljs-type">::HGE_SceneComponent</span> → component <span class="hljs-keyword">with</span> a relative transform
-           │    ├── hge<span class="hljs-type">::HGE_Camera</span>
-           │    ├── hge<span class="hljs-type">::HGE_Light</span>
-           │    ├── hge<span class="hljs-type">::HGE_Sprite</span>
-           │    └── hge<span class="hljs-type">::HGE_Shape</span> (base class for collision shapes)
-           │         ├── Box, Capsule, Circle
-</code></pre><p>Two namespaces coexist:</p>
-<ul>
-<li><strong><code>hn::</code></strong> — the engine itself: <code>Engine</code>, <code>Logger</code>, <code>LuaVM</code>, the plugin/module system, filesystem, ini parser.</li>
-<li><strong><code>hge::</code></strong> — the gameplay framework exposed to games: <code>HGE_Object</code>, <code>HGE_Actor</code>, <code>HGE_Level</code>, components, input, player controller.</li>
-</ul>
-<hr>
-<h2 id="2-the-core-hn-engine-">2. The core: <code>hn::Engine</code></h2>
-<p>Defined in <code>src/core/engine.h</code> / <code>engine.cpp</code>. This is the central class, non-copyable, instantiated once in <code>main()</code>.</p>
-<pre><code class="lang-cpp">hn::<span class="hljs-function">Engine <span class="hljs-title">engine</span><span class="hljs-params">(<span class="hljs-string">"default_engine.ini"</span>, <span class="hljs-comment">/*editor=*/</span><span class="hljs-literal">true</span>, <span class="hljs-comment">/*logger=*/</span><span class="hljs-literal">nullptr</span>)</span></span>;
-engine.StartMainLoop();
-</code></pre>
-<h3 id="responsibilities">Responsibilities</h3>
-<ul>
-<li><strong>Log initialization</strong> (<code>InitLog</code>), intercepting <code>std::cout</code> through <code>EngineStreambuf</code>.</li>
-<li><strong>Filesystem initialization</strong> (<code>InitFilesystem</code>) — raw files or a packaged archive, depending on editor mode.</li>
-<li><strong>Configuration loading</strong> via <code>HN_Ini</code> (an <code>.ini</code> file, e.g. <code>default_engine.ini</code>).</li>
-<li><strong>Rendering backend initialization</strong> (<code>rendering_interface</code>, private to <code>engine.cpp</code>): creates the Ogre context (<code>OgreBites::ApplicationContext</code>), the <code>Ogre::Root</code>, the <code>SceneManager</code>, the overlay system, and a <code>TrayManager</code> for debug/viewport UI.</li>
-<li><strong>Lua VM initialization</strong> (<code>LuaVM</code>) and registration of the standard functions.</li>
-<li><strong>Plugin loading</strong>: scans the <code>Plugins/&lt;category&gt;/&lt;name&gt;/*.dll</code> folder, loads each valid DLL through <code>Private::SysPlugin</code>, and calls <code>Init()</code> on every plugin.</li>
-<li><strong>Main loop</strong> (<code>StartMainLoop</code>): delegates rendering to <code>Ogre::Root::startRendering()</code>. Per-frame tick logic lives in <code>HNFrameListener::frameStarted</code> (internal to <code>engine.cpp</code>): updates the Lua VM, the actors (<code>Update</code> always, <code>Tick</code> only if <code>game_tick_enabled_</code>), the plugins, and clears expired viewport messages.</li>
-</ul>
-<h3 id="main-public-api">Main public API</h3>
-<table>
-<thead>
-<tr>
-<th>Method</th>
-<th>Role</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>StartGame()</code> / <code>EndGame()</code></td>
-<td>Enables/disables gameplay simulation (<code>game_tick_enabled_</code>), calls <code>StartGame</code>/<code>EndGame</code> on every actor of the current level</td>
-</tr>
-<tr>
-<td><code>OpenLevel(HGE_Level*)</code> / <code>UnloadCurrentLevel()</code></td>
-<td>Switches the current level (destroys the previous one)</td>
-</tr>
-<tr>
-<td><code>GetDeltaTime()</code></td>
-<td>Delta time of the current frame</td>
-</tr>
-<tr>
-<td><code>GetRenderingBackend()</code></td>
-<td>Opaque pointer (<code>void*</code>) to <code>rendering_interface</code>, used internally by rendering components</td>
-</tr>
-<tr>
-<td><code>SetCustomLoggerSubsystem(Logger*)</code> / <code>Log(...)</code></td>
-<td>Pluggable logging system</td>
-</tr>
-<tr>
-<td><code>GetLuaVM()</code></td>
-<td>Access to the Lua VM</td>
-</tr>
-<tr>
-<td><code>hn::GetEngineVersion()</code></td>
-<td>Returns the version string (<code>ENGINE_VERSION_STR</code>, defined in CMake)</td>
-</tr>
-</tbody>
-</table>
-<p>Rendering, plugins, and Lua are all cleanly torn down in <code>Engine</code>&#39;s destructor.</p>
-<hr>
-<h2 id="3-object-and-reflection-system-hge-hge_object-">3. Object and reflection system: <code>hge::HGE_Object</code></h2>
-<p>Defined in <code>src/core/object.h</code>. This is the base class for <strong>every</strong> entity in the engine (Actors and Components both derive from it indirectly).</p>
-<h3 id="lifecycle">Lifecycle</h3>
-<pre><code class="lang-cpp"><span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">Init</span><span class="hljs-params">()</span></span>;
-<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">StartGame</span><span class="hljs-params">()</span></span>;  <span class="hljs-comment">// start of gameplay simulation</span>
-<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">EndGame</span><span class="hljs-params">()</span></span>;    <span class="hljs-comment">// end of gameplay simulation</span>
-<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">Tick</span><span class="hljs-params">(<span class="hljs-keyword">double</span> dt)</span></span>;    <span class="hljs-comment">// gameplay only</span>
-<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">Update</span><span class="hljs-params">(<span class="hljs-keyword">double</span> dt)</span></span>;  <span class="hljs-comment">// every frame, even outside simulation</span>
-</code></pre>
-<h3 id="reflection-properties-">Reflection (properties)</h3>
-<p>Every object owns an <code>ordered_map&lt;std::string, HGE_Property&gt;</code> that maps a name to a typed pointer (<code>std::variant</code> of <code>int*, float*, bool*, std::string*, HGE_Vec2*, HGE_Vec3*, HGE_Vec4*, HGE_Transform*, HGE_Path*</code>). A property can be <code>Exposed</code> (external read/write, e.g. editor) or <code>Editable</code>.</p>
-<p>The <code>HPROPERTY</code> macro declares a reflectable property and attaches it to an <code>Observable</code>, which fires a callback whenever the value changes (checked every <code>Tick</code>):</p>
-<pre><code class="lang-cpp">HPROPERTY(<span class="hljs-name">life</span>, hge:<span class="hljs-symbol">:Exposed</span>)<span class="hljs-comment">;</span>
-</code></pre>
-<p>Generic accessors:</p>
-<pre><code class="lang-cpp"><span class="hljs-function">T <span class="hljs-title">GetPropertyValue</span><span class="hljs-params">(<span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name)</span></span>;
-<span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">SetPropertyValue</span><span class="hljs-params">(<span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name, T val)</span></span>;
-<span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">SetPropertyValueStr</span><span class="hljs-params">(<span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name, <span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* val)</span></span>; <span class="hljs-comment">// string → typed conversion</span>
-<span class="hljs-function"><span class="hljs-keyword">bool</span> <span class="hljs-title">PropertyExists</span><span class="hljs-params">(<span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name)</span></span>;
-</code></pre>
-<hr>
-<h2 id="4-actors-and-levels">4. Actors and levels</h2>
-<h3 id="-hge-hge_actor-src-core-actor-h-"><code>hge::HGE_Actor</code> (<code>src/core/actor.h</code>)</h3>
-<p>An <code>HGE_Actor</code> is a world <code>HGE_Object</code>: a transform (<code>HGE_Transform transform</code>), a physics mode (<code>NONE/STATIC/DYNAMIC/KINEMATIC</code>, backed internally by an opaque physics handle), and a collection of components (<code>std::unordered_map&lt;std::string, std::unique_ptr&lt;HGE_Component&gt;&gt;</code>).</p>
-<p>Components are added via:</p>
-<pre><code class="lang-cpp"><span class="hljs-function">HGE_Component* <span class="hljs-title">AddComponent</span><span class="hljs-params">(<span class="hljs-keyword">const</span> <span class="hljs-keyword">char</span>* name, ctor)</span></span>;
-<span class="hljs-comment">// or through the convenience macro:</span>
-HCOMPONENT(<span class="hljs-string">"Sprite"</span>, HGE_Sprite);
-</code></pre>
-<p>Exposed events (<code>HEventDispatcher</code>): <code>ED_transform_modified</code>, <code>ED_physics_mode_changed</code>, <code>ED_possess_state_changed</code> (with <code>OnPossessed(int)</code> / <code>OnUnpossessed(int)</code> for multiplayer handling).</p>
-<h3 id="-hge-hge_character-src-core-character-h-"><code>hge::HGE_Character</code> (<code>src/core/character.h</code>)</h3>
-<p>A specialization of <code>HGE_Actor</code> with character-style movement (platformer): gravity, max fall velocity, jump force, max horizontal velocity, ground/ceiling detection (<code>grounded_</code>, <code>on_ceiling_</code>), with <code>Jump()</code> and <code>MoveX(float)</code>. Internally uses a capsule shape component as its collider.</p>
-<h3 id="-hge-hge_level-src-core-level-h-"><code>hge::HGE_Level</code> (<code>src/core/level.h</code>)</h3>
-<p>A container of actors. <code>LoadFromFile(path)</code> loads a scene (XML format, via tinyxml2, linked in the CMake build). <code>SpawnActor(className)</code> instantiates an actor registered in the gameplay factory. <code>GetActors()</code>, <code>GetActorFromID(id)</code>, <code>CountActorsOfClass(...)</code>.</p>
-<hr>
-<h2 id="5-component-system">5. Component system</h2>
-<p>Base class: <code>hge::HGE_Component</code> (<code>src/components/base_component.h</code>) — an <code>HGE_Object</code> owned by an <code>HGE_Actor</code> (<code>parent_</code>). <code>Init()</code> is locked there (<code>final {}</code>): all logic goes through the constructor instead.</p>
-<p><code>hge::HGE_SceneComponent</code> adds a <code>relative_transform</code> and absolute-transform accessors (<code>GetAbsoluteTransform/Location/Rotation/Scale</code>), with a <code>TransformModified()</code> virtual hook.</p>
-<p>Concrete components available:</p>
-<ul>
-<li><strong><code>HGE_Camera</code></strong> (<code>camera.h</code>) — <code>Perspective</code>/<code>Orthographic</code>, <code>fov_ortho_height</code>, rendering backend hidden behind <code>BackendCamera*</code>.</li>
-<li><strong><code>HGE_Light</code></strong> (<code>light.h</code>) — color, attenuation, intensity, each with its own <code>*Modified()</code> callback.</li>
-<li><strong><code>HGE_Sprite</code></strong> (<code>sprite.h</code>) — a <code>material</code> (string), hidden rendering backend.</li>
-<li><strong><code>HGE_Shape</code></strong> (<code>shapes/shape.h</code>) — base class for collision shapes (density, friction, bounciness, and contact-event toggling). Concrete subclasses: <code>HGE_ShapeBox</code>, <code>HGE_ShapeCapsule</code>, <code>HGE_ShapeCircle</code>.</li>
-</ul>
-<hr>
-<h2 id="6-event-system-and-reactive-data">6. Event system and reactive data</h2>
-<ul>
-<li><strong><code>hge::HEventDispatcher&lt;Args...&gt;</code></strong> (<code>data/event_dispatcher.h</code>) — a minimal pub/sub: <code>Subscribe(fn) → id</code>, <code>Unsubscribe(id)</code>, <code>Call(args...)</code>. Used for all internal Actor/Component events.</li>
-<li><strong><code>Observable&lt;T&gt;</code> / <code>IObservable</code></strong> (<code>data/observable.h</code>) — wraps a reference and runs a callback whenever the value changes between two calls to <code>Tick()</code>. This is the mechanism behind <code>HPROPERTY</code>.</li>
-<li><strong><code>hn::HN_Ini</code></strong> (<code>data/ini_parser.h</code>) — a templated <code>.ini</code> file parser (<code>Get&lt;T&gt;</code>, <code>GetEntries&lt;T&gt;</code>, <code>SetKeyValue&lt;T&gt;</code>, <code>SaveIniFile()</code>), based on <code>inih</code> (third-party).</li>
-<li><strong><code>ordered_map</code></strong> (<code>data/ordered_map.h</code>) — an insertion-order-preserving map, used for properties (likely to keep a stable display order in an editor).</li>
-</ul>
-<hr>
-<h2 id="7-module-system-a-game-s-gameplay-code-">7. Module system (a game&#39;s gameplay code)</h2>
-<p>A <strong>module</strong> is a game DLL that registers its gameplay classes (custom <code>HGE_Object</code>s, typically <code>HGE_Actor</code>s) into the engine&#39;s global factory, so that <code>HGE_Level::SpawnActor(&quot;MyClass&quot;)</code> can instantiate them by name.</p>
-<pre><code class="lang-cpp"><span class="hljs-comment">// game/src/module.cpp</span>
-<span class="hljs-meta">#<span class="hljs-meta-keyword">include</span> <span class="hljs-string">"player.h"</span></span>
-<span class="hljs-meta">#<span class="hljs-meta-keyword">include</span> <span class="hljs-string">"../../src/modules/module.h"</span></span>
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #090D15;
+      --bg-panel: #121927;
+      --bg-panel-2: #0E1420;
+      --text: #E8ECF3;
+      --muted: #8C97AC;
+      --accent: #FF9A4D;
+      --accent-soft: rgba(255, 154, 77, 0.14);
+      --grid: #4C86FF;
+      --border: #212B3E;
+      --code-bg: #060A12;
+      --code-text: #D7DEEA;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #090D15;
+    --bg-panel: #121927;
+    --bg-panel-2: #0E1420;
+    --text: #E8ECF3;
+    --muted: #8C97AC;
+    --accent: #FF9A4D;
+    --accent-soft: rgba(255, 154, 77, 0.14);
+    --grid: #4C86FF;
+    --border: #212B3E;
+    --code-bg: #060A12;
+    --code-text: #D7DEEA;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  img, svg { max-width: 100%; }
+
+  a { color: inherit; }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 0 28px;
+  }
+
+  /* ---------- Nav ---------- */
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 16px 0;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 1.05rem;
+    letter-spacing: -0.01em;
+    text-decoration: none;
+    color: var(--text);
+    flex-shrink: 0;
+  }
+  .brand svg { display: block; }
+
+  .tabs {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab-btn {
+    font-family: var(--font-body);
+    font-weight: 500;
+    font-size: 0.92rem;
+    color: var(--muted);
+    background: none;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 7px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .tab-btn:hover { color: var(--text); background: var(--bg-panel-2); }
+  .tab-btn[aria-selected="true"] { color: var(--accent); background: var(--accent-soft); }
+
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    color: var(--text);
+    text-decoration: none;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .icon-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+  /* ---------- Buttons ---------- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-body);
+    font-weight: 600;
+    font-size: 0.92rem;
+    padding: 11px 20px;
+    border-radius: 8px;
+    text-decoration: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary { background: var(--accent); color: #14100A; }
+  .btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, white 12%); }
+  .btn-outline { border-color: var(--border); color: var(--text); background: transparent; }
+  .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ---------- Sections / tab panels ---------- */
+  section[role="tabpanel"] { display: none; }
+  section[role="tabpanel"].active { display: block; }
+
+  .eyebrow-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 5px 11px;
+    border-radius: 6px;
+  }
+  .eyebrow-tag .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+  }
+
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.015em;
+    margin: 0;
+  }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid var(--border);
+  }
+  .hero-inner {
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 40px;
+    align-items: center;
+    padding: 64px 0 56px;
+  }
+  @media (max-width: 860px) {
+    .hero-inner { grid-template-columns: 1fr; padding: 40px 0 32px; }
+  }
+  .hero h1 {
+    font-size: clamp(2.2rem, 4.3vw, 3.15rem);
+    line-height: 1.08;
+    margin: 18px 0 18px;
+  }
+  .hero p.lead {
+    font-size: 1.08rem;
+    color: var(--muted);
+    max-width: 46ch;
+    margin: 0 0 28px;
+  }
+  .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; }
+
+  .horizon-art {
+    position: relative;
+    aspect-ratio: 4 / 3.1;
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--bg-panel-2);
+  }
+  .horizon-art svg { width: 100%; height: 100%; display: block; }
+
+  /* ---------- Feature grid ---------- */
+  .section-pad { padding: 56px 0; }
+  .section-head { max-width: 60ch; margin-bottom: 34px; }
+  .section-head .eyebrow-tag { margin-bottom: 14px; }
+  .section-head h2 { font-size: 1.7rem; margin-bottom: 10px; }
+  .section-head p { color: var(--muted); margin: 0; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 860px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    padding: 22px;
+    clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+  }
+  .card h3 {
+    font-size: 1.02rem;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .card h3 svg { flex-shrink: 0; color: var(--accent); }
+  .card p { color: var(--muted); font-size: 0.92rem; margin: 0; }
+
+  /* ---------- Code blocks ---------- */
+  .code-block {
+    background: var(--code-bg);
+    color: var(--code-text);
+    font-family: var(--font-mono);
+    font-size: 0.83rem;
+    line-height: 1.6;
+    padding: 18px 20px;
+    border-radius: 10px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .code-block .cm { color: #6C7891; }
+  .code-block .kw { color: #7FA9FF; }
+  .code-block .fn { color: #FFB067; }
+  .code-block .str { color: #9BD98A; }
+
+  /* ---------- Features layout ---------- */
+  .feat-row {
+    display: grid;
+    grid-template-columns: 0.85fr 1.15fr;
+    gap: 34px;
+    align-items: start;
+    padding: 34px 0;
+    border-top: 1px solid var(--border);
+  }
+  .feat-row:first-of-type { border-top: none; }
+  @media (max-width: 780px) { .feat-row { grid-template-columns: 1fr; gap: 16px; } }
+  .feat-row .idx {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  .feat-row h3 { font-size: 1.25rem; margin: 6px 0 10px; }
+  .feat-row p { color: var(--muted); margin: 0 0 14px; }
+  .feat-row code.inline {
+    font-family: var(--font-mono);
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.86em;
+  }
+
+  /* ---------- Documentation ---------- */
+  .doc-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+  }
+  @media (max-width: 700px) { .doc-grid { grid-template-columns: 1fr; } }
+  .doc-card {
+    display: block;
+    width: 100%;
+    text-align: left;
+    text-decoration: none;
+    color: var(--text);
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+  }
+  .doc-card:hover { border-color: var(--accent); }
+  .doc-card .num { font-family: var(--font-mono); font-size: 0.76rem; color: var(--accent); }
+  .doc-card h3 { font-size: 1rem; margin: 6px 0 6px; }
+  .doc-card p { margin: 0; color: var(--muted); font-size: 0.88rem; }
+
+  .doc-callout {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    background: var(--bg-panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 22px 26px;
+    margin-top: 30px;
+  }
+  .doc-callout p { margin: 0; color: var(--muted); max-width: 46ch; }
+  .doc-callout h3 { font-size: 1.05rem; margin-bottom: 6px; }
+
+  /* ---------- Documentation detail view ---------- */
+  .doc-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-family: var(--font-body);
+    font-weight: 500;
+    font-size: 0.88rem;
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-bottom: 24px;
+    transition: border-color 0.15s ease, color 0.15s ease;
+  }
+  .doc-back:hover { border-color: var(--accent); color: var(--accent); }
+
+  .doc-detail-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .doc-detail-head .num {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 9px;
+    border-radius: 6px;
+  }
+  .doc-detail-head h2 { font-size: 1.55rem; }
+
+  .doc-body { max-width: 74ch; }
+  .doc-body h3 {
+    font-size: 1.1rem;
+    margin: 30px 0 12px;
+  }
+  .doc-body p {
+    color: var(--muted);
+    margin: 0 0 14px;
+  }
+  .doc-body p code, .doc-body li code, .doc-body td code {
+    font-family: var(--font-mono);
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.86em;
+  }
+  .doc-body ul, .doc-body ol {
+    color: var(--muted);
+    margin: 0 0 14px;
+    padding-left: 22px;
+  }
+  .doc-body li { margin-bottom: 6px; }
+  .doc-body .code-block { margin: 0 0 18px; }
+  .doc-body .doc-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0 0 20px;
+    font-size: 0.88rem;
+  }
+  .doc-body .doc-table th, .doc-body .doc-table td {
+    border: 1px solid var(--border);
+    padding: 9px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .doc-body .doc-table th {
+    background: var(--bg-panel-2);
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 0.82rem;
+  }
+  .doc-body .doc-table td { color: var(--muted); }
+  .doc-note {
+    display: flex;
+    gap: 10px;
+    background: var(--accent-soft);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    color: var(--text);
+    font-size: 0.9rem;
+    margin: 0 0 18px;
+  }
+  .doc-detail-footer {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 34px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ---------- Downloads ---------- */
+  .status-banner {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin-bottom: 30px;
+  }
+  .status-banner svg { flex-shrink: 0; margin-top: 2px; color: var(--accent); }
+  .status-banner h3 { font-size: 1rem; margin-bottom: 5px; }
+  .status-banner p { margin: 0; color: var(--muted); font-size: 0.92rem; }
+
+  #releases-list { display: grid; gap: 12px; margin-bottom: 10px; }
+  .release-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .release-card .rtitle { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .release-card .rtag {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 2px 8px;
+    border-radius: 5px;
+  }
+  .release-card .rdate { font-size: 0.82rem; color: var(--muted); }
+  .release-card .rassets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .release-card .rassets a {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    text-decoration: none;
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+    border-radius: 6px;
+  }
+  .release-card .rassets a:hover { border-color: var(--accent); color: var(--accent); }
+
+  .empty-state {
+    text-align: center;
+    padding: 46px 24px;
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+  }
+  .empty-state p { color: var(--muted); max-width: 40ch; margin: 10px auto 22px; }
+  .empty-state .glyph { font-size: 1.6rem; }
+
+  .build-steps {
+    margin-top: 46px;
+  }
+  .steps-list {
+    list-style: none;
+    counter-reset: step;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 10px;
+  }
+  .steps-list li {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 30px 1fr;
+    gap: 14px;
+    align-items: start;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 15px 18px;
+  }
+  .steps-list li::before {
+    content: counter(step);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--accent);
+    background: var(--accent-soft);
+    width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 6px;
+  }
+  .steps-list code { font-family: var(--font-mono); font-size: 0.86rem; color: var(--text); }
+  .steps-list .step-note { color: var(--muted); font-size: 0.85rem; margin-top: 3px; }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 30px 0 40px;
+    margin-top: 20px;
+  }
+  .footer-inner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+  .footer-inner p { margin: 0; color: var(--muted); font-size: 0.86rem; }
+  .footer-links { display: flex; gap: 18px; }
+  .footer-links a { color: var(--muted); text-decoration: none; font-size: 0.86rem; }
+  .footer-links a:hover { color: var(--accent); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav-inner">
+    <a class="brand" href="#home" data-tab-link="accueil">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+        <circle cx="11" cy="9" r="4" fill="var(--accent)"/>
+        <path d="M0 15 Q11 10 22 15" stroke="var(--grid)" stroke-width="1.4" fill="none"/>
+        <path d="M0 18 Q11 14 22 18" stroke="var(--grid)" stroke-width="1.4" fill="none" opacity="0.5"/>
+      </svg>
+      Horizon-Next
+    </a>
+    <nav class="tabs" role="tablist" aria-label="Main navigation">
+      <button class="tab-btn" role="tab" aria-selected="true" data-tab="accueil">Home</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="fonctionnalites">Features</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="documentation">Documentation</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="telechargements">Downloads</button>
+    </nav>
+    <div class="nav-right">
+      <a class="icon-btn" href="https://github.com/oscar-soirey/Horizon-Next" target="_blank" rel="noopener" aria-label="View on GitHub" title="GitHub">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.73.5.98 5.24.98 11.52c0 5.02 3.26 9.28 7.78 10.78.57.1.78-.25.78-.55 0-.27-.01-1.17-.02-2.12-3.16.69-3.83-1.34-3.83-1.34-.52-1.31-1.26-1.66-1.26-1.66-1.03-.7.08-.69.08-.69 1.14.08 1.74 1.17 1.74 1.17 1.01 1.73 2.65 1.23 3.3.94.1-.73.4-1.23.72-1.51-2.52-.29-5.17-1.26-5.17-5.6 0-1.24.44-2.25 1.17-3.04-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.14 1.16.91-.25 1.89-.38 2.86-.38.97 0 1.95.13 2.86.38 2.18-1.47 3.14-1.16 3.14-1.16.62 1.57.23 2.73.11 3.02.73.79 1.17 1.8 1.17 3.04 0 4.35-2.66 5.31-5.19 5.59.41.35.77 1.04.77 2.11 0 1.52-.01 2.75-.01 3.12 0 .3.2.66.79.55 4.51-1.51 7.77-5.76 7.77-10.78C23.02 5.24 18.27.5 12 .5Z"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- HOME -->
+  <section id="accueil" role="tabpanel" class="active" aria-labelledby="accueil">
+    <div class="hero">
+      <div class="wrap hero-inner">
+        <div>
+          <span class="eyebrow-tag"><span class="dot"></span>v2026.1.0 Beta</span>
+          <h1>A 3D game engine, written to be read as much as played.</h1>
+          <p class="lead">Horizon-Next is a C++20 engine built on Ogre3D: a reflective actor/component system, engine plugins, DLL-loaded game modules, and Lua scripting — all behind a stable API.</p>
+          <div class="hero-ctas">
+            <a class="btn btn-primary" href="https://github.com/oscar-soirey/Horizon-Next" target="_blank" rel="noopener">View source code</a>
+            <button class="btn btn-outline" data-tab-link="telechargements">Download</button>
+          </div>
+        </div>
+        <div class="horizon-art" aria-hidden="true">
+          <svg viewBox="0 0 400 310" preserveAspectRatio="xMidYMid slice">
+            <defs>
+              <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--bg-panel-2)"/>
+                <stop offset="100%" stop-color="var(--bg-panel)"/>
+              </linearGradient>
+              <radialGradient id="sun" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.9"/>
+                <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <rect width="400" height="310" fill="url(#sky)"/>
+            <circle cx="200" cy="128" r="90" fill="url(#sun)"/>
+            <circle cx="200" cy="128" r="34" fill="var(--accent)"/>
+            <line x1="0" y1="150" x2="400" y2="150" stroke="var(--border)" stroke-width="1"/>
+            <g stroke="var(--grid)" stroke-width="1" opacity="0.75">
+              <path d="M200 150 L20 305"/>
+              <path d="M200 150 L90 305"/>
+              <path d="M200 150 L160 305"/>
+              <path d="M200 150 L240 305"/>
+              <path d="M200 150 L310 305"/>
+              <path d="M200 150 L380 305"/>
+            </g>
+            <g stroke="var(--grid)" stroke-width="1" opacity="0.55">
+              <path d="M2 178 L398 178"/>
+              <path d="M-20 212 L420 212"/>
+              <path d="M-60 255 L460 255"/>
+            </g>
+            <g stroke="var(--accent)" stroke-width="1.4" opacity="0.85" fill="none">
+              <rect x="256" y="176" width="46" height="34" transform="skewX(-8)"/>
+              <line x1="256" y1="176" x2="270" y2="160"/>
+              <line x1="302" y1="176" x2="316" y2="160"/>
+              <line x1="256" y1="210" x2="270" y2="194"/>
+              <line x1="302" y1="210" x2="316" y2="194"/>
+              <rect x="270" y="160" width="46" height="34" transform="skewX(-8)"/>
+            </g>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="wrap section-pad">
+      <div class="section-head">
+        <span class="eyebrow-tag">What the engine covers</span>
+        <h2>Everything you need to run a game, nothing more.</h2>
+        <p>Six core building blocks, each isolated behind a clean interface.</p>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>Ogre3D rendering</h3>
+          <p>Cameras, lights and sprites go through an internal rendering interface, ready for Direct3D 11, OpenGL or Vulkan.</p>
+        </div>
+        <div class="card">
+          <h3><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5z"/></svg>Lightweight reflection</h3>
+          <p>Every object exposes its typed properties through a simple macro, with callbacks fired on every change.</p>
+        </div>
+        <div class="card">
+          <h3><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/></svg>Actors & components</h3>
+          <p>Transform, physics and composed — not inherited — components keep every actor simple to read.</p>
+        </div>
+        <div class="card">
+          <h3><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v6H4zM4 14h7v6H4zM14 14h6v6h-6z"/></svg>Plugins & modules</h3>
+          <p>A game registers its gameplay classes in a separate DLL. The engine itself rarely needs recompiling.</p>
+        </div>
+        <div class="card">
+          <h3><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 4l-6 8 6 8M16 4l6 8-6 8"/></svg>Lua scripting</h3>
+          <p>An embedded Lua VM drives high-level logic without recompiling the engine or the game.</p>
+        </div>
+        <div class="card">
+          <h3><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="16" r="3"/><path d="M8 11v2a3 3 0 0 0 3 3h1"/></svg>Multiplayer</h3>
+          <p>Player controllers possess actors and each manage their own viewport.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="fonctionnalites" role="tabpanel" aria-labelledby="fonctionnalites">
+    <div class="wrap section-pad">
+      <div class="section-head">
+        <span class="eyebrow-tag">Under the hood</span>
+        <h2>Two namespaces, one clean boundary.</h2>
+        <p><code class="inline">hn::</code> is the engine — logs, plugins, the Lua VM. <code class="inline">hge::</code> is the game framework exposed to modules: actors, levels, components, input.</p>
+      </div>
+
+      <div class="feat-row">
+        <div>
+          <span class="idx">Objects & properties</span>
+          <h3>One property, one line</h3>
+          <p><code class="inline">HGE_Object</code> is the base of every reflectable entity. The <code class="inline">HPROPERTY</code> macro attaches it to an <code class="inline">Observable</code>, checked on every tick.</p>
+        </div>
+        <div class="code-block"><span class="cm">// player.h</span>
+<span class="kw">class</span> Player : <span class="kw">public</span> hge::HGE_Actor {
+<span class="kw">public</span>:
+    <span class="kw">int</span> life = <span class="fn">100</span>;
+
+    Player() { HPROPERTY(life, hge::Exposed); }
+};</div>
+      </div>
+
+      <div class="feat-row">
+        <div>
+          <span class="idx">Components</span>
+          <h3>Composed, not inherited</h3>
+          <p>A camera, a light or a collision shape are added to an actor at runtime, via the <code class="inline">HCOMPONENT</code> macro.</p>
+        </div>
+        <div class="code-block"><span class="cm">// in the actor's constructor</span>
+HCOMPONENT(<span class="str">"Sprite"</span>, HGE_Sprite);
+HCOMPONENT(<span class="str">"Collider"</span>, HGE_ShapeCapsule);</div>
+      </div>
+
+      <div class="feat-row">
+        <div>
+          <span class="idx">Gameplay modules</span>
+          <h3>The game registers, the engine loads</h3>
+          <p>A module exports its classes into a global factory. <code class="inline">HGE_Level::SpawnActor("Player")</code> then instantiates them by name.</p>
+        </div>
+        <div class="code-block"><span class="cm">// game/src/module.cpp</span>
+HGE_LINK_MODULE
+(
+    HGE_MODULE_REGISTER(Player);
+)</div>
+      </div>
+
+      <div class="feat-row">
+        <div>
+          <span class="idx">Engine plugins</span>
+          <h3>Extend the engine, not the game</h3>
+          <p>A plugin implements <code class="inline">IPlugin</code> and attaches to the engine itself — the FBX importer is the bundled example. It must be built against the same engine version.</p>
+        </div>
+        <div class="code-block"><span class="cm">// iplugin.h</span>
+<span class="kw">virtual</span> <span class="kw">void</span> Init(EngineInfos*);
+<span class="kw">virtual</span> <span class="kw">void</span> Tick(<span class="kw">double</span> dt);
+<span class="kw">virtual</span> <span class="kw">void</span> StartGame();
+<span class="kw">virtual</span> <span class="kw">void</span> EndGame();</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DOCUMENTATION -->
+  <section id="documentation" role="tabpanel" aria-labelledby="documentation">
+    <div class="wrap section-pad">
+
+      <div id="doc-overview">
+        <div class="section-head">
+          <span class="eyebrow-tag">Reference</span>
+          <h2>One module, one page.</h2>
+          <p>A summary of each major part of the engine. Click a card to read the full section, right here.</p>
+        </div>
+
+        <div class="doc-grid">
+          <button class="doc-card" type="button" data-doc="2">
+            <span class="num">§2</span>
+            <h3>hn::Engine</h3>
+            <p>The entry point: initializes rendering, plugins, the Lua VM, and drives the main loop.</p>
+          </button>
+          <button class="doc-card" type="button" data-doc="3">
+            <span class="num">§3</span>
+            <h3>HGE_Object & reflection</h3>
+            <p>The shared lifecycle (Init, Tick, Update) and the typed property system.</p>
+          </button>
+          <button class="doc-card" type="button" data-doc="4">
+            <span class="num">§4</span>
+            <h3>Actors & levels</h3>
+            <p>Transform, physics mode, XML scene loading, and instantiation by class name.</p>
+          </button>
+          <button class="doc-card" type="button" data-doc="5">
+            <span class="num">§5</span>
+            <h3>Components</h3>
+            <p>Camera, light, sprite, collision shapes — each with its own callbacks.</p>
+          </button>
+          <button class="doc-card" type="button" data-doc="7">
+            <span class="num">§7</span>
+            <h3>Gameplay modules</h3>
+            <p>How a game registers its classes in the engine's factory, without recompiling it.</p>
+          </button>
+          <button class="doc-card" type="button" data-doc="8">
+            <span class="num">§8</span>
+            <h3>Engine plugins</h3>
+            <p>The IPlugin interface and dynamic loading of engine extensions.</p>
+          </button>
+          <button class="doc-card" type="button" data-doc="9">
+            <span class="num">§9</span>
+            <h3>Lua scripting</h3>
+            <p>The embedded VM, registering C functions, and running scripts.</p>
+          </button>
+          <button class="doc-card" type="button" data-doc="10">
+            <span class="num">§10</span>
+            <h3>Input & multiplayer</h3>
+            <p>Input actions and axes, player controllers, and actor possession.</p>
+          </button>
+        </div>
+
+        <div class="doc-callout">
+          <div>
+            <h3>Want the full document?</h3>
+            <p>Detailed architecture, the CMake build, and current points of attention — the full version lives in <code class="inline">doc.md</code> on GitHub.</p>
+          </div>
+          <a class="btn btn-outline" href="https://github.com/oscar-soirey/Horizon-Next/blob/main/doc.md" target="_blank" rel="noopener">Open doc.md</a>
+        </div>
+      </div>
+
+      <div id="doc-detail" style="display:none;">
+        <button class="doc-back" type="button" id="doc-back-btn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 6l-6 6 6 6"/></svg>
+          Back to sections
+        </button>
+        <div id="doc-detail-content"></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- DOWNLOADS -->
+  <section id="telechargements" role="tabpanel" aria-labelledby="telechargements">
+    <div class="wrap section-pad">
+      <div class="section-head">
+        <span class="eyebrow-tag">Get the engine</span>
+        <h2>Live GitHub releases.</h2>
+        <p>This page queries the repo's releases on load. Until a first packaged version ships, building from source is the simplest option.</p>
+      </div>
+
+      <div id="releases-list"></div>
+      <div id="releases-empty" class="empty-state" style="display:none;">
+        <div class="glyph">🌅</div>
+        <h3>No release published yet</h3>
+        <p>Horizon-Next doesn't have a packaged build yet. The repo remains the source of truth — clone it and build, or follow it to get notified on the first release.</p>
+        <a class="btn btn-primary" href="https://github.com/oscar-soirey/Horizon-Next/releases" target="_blank" rel="noopener">View releases on GitHub</a>
+      </div>
+
+      <div class="build-steps">
+        <div class="section-head" style="margin-bottom:20px;">
+          <h2 style="font-size:1.3rem;">Build from source</h2>
+          <p>On Windows, with CMake. The repo's scripts handle the rest.</p>
+        </div>
+        <ol class="steps-list">
+          <li>
+            <div>
+              <code>git clone https://github.com/oscar-soirey/Horizon-Next.git</code>
+              <div class="step-note">Fetches the repo and its subfolders (engine, example game, FBX plugin).</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <code>install_depedencies.bat</code>
+              <div class="step-note">Installs the third-party dependencies needed for the build.</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <code>generate.bat</code>
+              <div class="step-note">Generates the CMake project files.</div>
+            </div>
+          </li>
+          <li>
+            <div>
+              <code>build_and_run.bat</code>
+              <div class="step-note">Builds the engine and the game executable, then runs them. <code>build_and_run_editor.bat</code> does the same for the editor.</div>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap footer-inner">
+    <p>Horizon-Next — C++20 game engine, by Oscar Soirey.</p>
+    <div class="footer-links">
+      <a href="https://github.com/oscar-soirey/Horizon-Next" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/oscar-soirey/Horizon-Next/blob/main/doc.md" target="_blank" rel="noopener">Documentation</a>
+      <a href="https://github.com/oscar-soirey/Horizon-Next/releases" target="_blank" rel="noopener">Releases</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // ---- Tabs ----
+  const tabButtons = document.querySelectorAll('[data-tab]');
+  const tabLinks = document.querySelectorAll('[data-tab-link]');
+  const panels = document.querySelectorAll('section[role="tabpanel"]');
+
+  function activateTab(name) {
+    tabButtons.forEach(b => b.setAttribute('aria-selected', b.dataset.tab === name ? 'true' : 'false'));
+    panels.forEach(p => p.classList.toggle('active', p.id === name));
+    window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+  }
+
+  tabButtons.forEach(btn => btn.addEventListener('click', () => activateTab(btn.dataset.tab)));
+  tabLinks.forEach(el => el.addEventListener('click', (e) => {
+    e.preventDefault();
+    activateTab(el.dataset.tabLink);
+  }));
+
+  // ---- Documentation: embedded content from doc.md ----
+  const DOC_SECTIONS = {
+    "2": {
+      num: "§2",
+      title: "hn::Engine",
+      html: `
+        <p>Defined in <code>src/core/engine.h</code> / <code>engine.cpp</code>. This is the central class, non-copyable, instantiated once in <code>main()</code>.</p>
+        <div class="code-block">hn::Engine engine(<span class="str">"default_engine.ini"</span>, <span class="cm">/*editor=*/</span><span class="kw">true</span>, <span class="cm">/*logger=*/</span><span class="kw">nullptr</span>);
+engine.StartMainLoop();</div>
+        <h3>Responsibilities</h3>
+        <ul>
+          <li><strong>Log initialization</strong> (<code>InitLog</code>), intercepting <code>std::cout</code> through <code>EngineStreambuf</code>.</li>
+          <li><strong>Filesystem initialization</strong> (<code>InitFilesystem</code>) — raw files or a packaged archive, depending on editor mode.</li>
+          <li><strong>Configuration loading</strong> via <code>HN_Ini</code> (an <code>.ini</code> file, e.g. <code>default_engine.ini</code>).</li>
+          <li><strong>Rendering backend initialization</strong> (<code>rendering_interface</code>, private to <code>engine.cpp</code>): creates the Ogre context (<code>OgreBites::ApplicationContext</code>), the <code>Ogre::Root</code>, the <code>SceneManager</code>, the overlay system, and a <code>TrayManager</code> for debug/viewport UI.</li>
+          <li><strong>Lua VM initialization</strong> (<code>LuaVM</code>) and registration of the standard functions.</li>
+          <li><strong>Plugin loading</strong>: scans the <code>Plugins/&lt;category&gt;/&lt;name&gt;/*.dll</code> folder, loads each valid DLL through <code>Private::SysPlugin</code>, and calls <code>Init()</code> on every plugin.</li>
+          <li><strong>Main loop</strong> (<code>StartMainLoop</code>): delegates rendering to <code>Ogre::Root::startRendering()</code>. Per-frame tick logic lives in <code>HNFrameListener::frameStarted</code> (internal to <code>engine.cpp</code>): updates the Lua VM, the actors (<code>Update</code> always, <code>Tick</code> only if <code>game_tick_enabled_</code>), the plugins, and clears expired viewport messages.</li>
+        </ul>
+        <h3>Main public API</h3>
+        <table class="doc-table">
+          <thead><tr><th>Method</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td><code>StartGame()</code> / <code>EndGame()</code></td><td>Enables/disables gameplay simulation (<code>game_tick_enabled_</code>), calls <code>StartGame</code>/<code>EndGame</code> on every actor of the current level</td></tr>
+            <tr><td><code>OpenLevel(HGE_Level*)</code> / <code>UnloadCurrentLevel()</code></td><td>Switches the current level (destroys the previous one)</td></tr>
+            <tr><td><code>GetDeltaTime()</code></td><td>Delta time of the current frame</td></tr>
+            <tr><td><code>GetRenderingBackend()</code></td><td>Opaque pointer (<code>void*</code>) to <code>rendering_interface</code>, used internally by rendering components</td></tr>
+            <tr><td><code>SetCustomLoggerSubsystem(Logger*)</code> / <code>Log(...)</code></td><td>Pluggable logging system</td></tr>
+            <tr><td><code>GetLuaVM()</code></td><td>Access to the Lua VM</td></tr>
+            <tr><td><code>hn::GetEngineVersion()</code></td><td>Returns the version string (<code>ENGINE_VERSION_STR</code>, defined in CMake)</td></tr>
+          </tbody>
+        </table>
+        <p>Rendering, plugins, and Lua are all cleanly torn down in <code>Engine</code>'s destructor.</p>
+      `
+    },
+    "3": {
+      num: "§3",
+      title: "Object and reflection system: hge::HGE_Object",
+      html: `
+        <p>Defined in <code>src/core/object.h</code>. This is the base class for <strong>every</strong> entity in the engine (Actors and Components both derive from it indirectly).</p>
+        <h3>Lifecycle</h3>
+        <div class="code-block"><span class="kw">virtual</span> <span class="kw">void</span> Init();
+<span class="kw">virtual</span> <span class="kw">void</span> StartGame();  <span class="cm">// start of gameplay simulation</span>
+<span class="kw">virtual</span> <span class="kw">void</span> EndGame();    <span class="cm">// end of gameplay simulation</span>
+<span class="kw">virtual</span> <span class="kw">void</span> Tick(<span class="kw">double</span> dt);    <span class="cm">// gameplay only</span>
+<span class="kw">virtual</span> <span class="kw">void</span> Update(<span class="kw">double</span> dt);  <span class="cm">// every frame, even outside simulation</span></div>
+        <h3>Reflection (properties)</h3>
+        <p>Every object owns an <code>ordered_map&lt;std::string, HGE_Property&gt;</code> that maps a name to a typed pointer (<code>std::variant</code> of <code>int*, float*, bool*, std::string*, HGE_Vec2*, HGE_Vec3*, HGE_Vec4*, HGE_Transform*, HGE_Path*</code>). A property can be <code>Exposed</code> (external read/write, e.g. editor) or <code>Editable</code>.</p>
+        <p>The <code>HPROPERTY</code> macro declares a reflectable property and attaches it to an <code>Observable</code>, which fires a callback whenever the value changes (checked every <code>Tick</code>):</p>
+        <div class="code-block">HPROPERTY(life, hge::Exposed);</div>
+        <p>Generic accessors:</p>
+        <div class="code-block">T GetPropertyValue(<span class="kw">const</span> <span class="kw">char</span>* name);
+<span class="kw">void</span> SetPropertyValue(<span class="kw">const</span> <span class="kw">char</span>* name, T val);
+<span class="kw">void</span> SetPropertyValueStr(<span class="kw">const</span> <span class="kw">char</span>* name, <span class="kw">const</span> <span class="kw">char</span>* val); <span class="cm">// string → typed conversion</span>
+<span class="kw">bool</span> PropertyExists(<span class="kw">const</span> <span class="kw">char</span>* name);</div>
+      `
+    },
+    "4": {
+      num: "§4",
+      title: "Actors and levels",
+      html: `
+        <h3>hge::HGE_Actor (src/core/actor.h)</h3>
+        <p>An <code>HGE_Actor</code> is a world <code>HGE_Object</code>: a transform (<code>HGE_Transform transform</code>), a physics mode (<code>NONE/STATIC/DYNAMIC/KINEMATIC</code>, backed internally by an opaque physics handle), and a collection of components (<code>std::unordered_map&lt;std::string, std::unique_ptr&lt;HGE_Component&gt;&gt;</code>).</p>
+        <p>Components are added via:</p>
+        <div class="code-block">HGE_Component* AddComponent(<span class="kw">const</span> <span class="kw">char</span>* name, ctor);
+<span class="cm">// or through the convenience macro:</span>
+HCOMPONENT(<span class="str">"Sprite"</span>, HGE_Sprite);</div>
+        <p>Exposed events (<code>HEventDispatcher</code>): <code>ED_transform_modified</code>, <code>ED_physics_mode_changed</code>, <code>ED_possess_state_changed</code> (with <code>OnPossessed(int)</code> / <code>OnUnpossessed(int)</code> for multiplayer handling).</p>
+        <h3>hge::HGE_Character (src/core/character.h)</h3>
+        <p>A specialization of <code>HGE_Actor</code> with character-style movement (platformer): gravity, max fall velocity, jump force, max horizontal velocity, ground/ceiling detection (<code>grounded_</code>, <code>on_ceiling_</code>), with <code>Jump()</code> and <code>MoveX(float)</code>. Internally uses a capsule shape component as its collider.</p>
+        <h3>hge::HGE_Level (src/core/level.h)</h3>
+        <p>A container of actors. <code>LoadFromFile(path)</code> loads a scene (XML format, via tinyxml2, linked in the CMake build). <code>SpawnActor(className)</code> instantiates an actor registered in the gameplay factory. <code>GetActors()</code>, <code>GetActorFromID(id)</code>, <code>CountActorsOfClass(...)</code>.</p>
+      `
+    },
+    "5": {
+      num: "§5",
+      title: "Component system",
+      html: `
+        <p>Base class: <code>hge::HGE_Component</code> (<code>src/components/base_component.h</code>) — an <code>HGE_Object</code> owned by an <code>HGE_Actor</code> (<code>parent_</code>). <code>Init()</code> is locked there (<code>final {}</code>): all logic goes through the constructor instead.</p>
+        <p><code>hge::HGE_SceneComponent</code> adds a <code>relative_transform</code> and absolute-transform accessors (<code>GetAbsoluteTransform/Location/Rotation/Scale</code>), with a <code>TransformModified()</code> virtual hook.</p>
+        <h3>Concrete components available</h3>
+        <ul>
+          <li><strong>HGE_Camera</strong> (<code>camera.h</code>) — <code>Perspective</code>/<code>Orthographic</code>, <code>fov_ortho_height</code>, rendering backend hidden behind <code>BackendCamera*</code>.</li>
+          <li><strong>HGE_Light</strong> (<code>light.h</code>) — color, attenuation, intensity, each with its own <code>*Modified()</code> callback.</li>
+          <li><strong>HGE_Sprite</strong> (<code>sprite.h</code>) — a <code>material</code> (string), hidden rendering backend.</li>
+          <li><strong>HGE_Shape</strong> (<code>shapes/shape.h</code>) — base class for collision shapes (density, friction, bounciness, and contact-event toggling). Concrete subclasses: <code>HGE_ShapeBox</code>, <code>HGE_ShapeCapsule</code>, <code>HGE_ShapeCircle</code>.</li>
+        </ul>
+      `
+    },
+    "7": {
+      num: "§7",
+      title: "Module system (a game's gameplay code)",
+      html: `
+        <p>A <strong>module</strong> is a game DLL that registers its gameplay classes (custom <code>HGE_Object</code>s, typically <code>HGE_Actor</code>s) into the engine's global factory, so that <code>HGE_Level::SpawnActor("MyClass")</code> can instantiate them by name.</p>
+        <div class="code-block"><span class="cm">// game/src/module.cpp</span>
+#include <span class="str">"player.h"</span>
+#include <span class="str">"../../src/modules/module.h"</span>
 
 HGE_LINK_MODULE
 (
     HGE_MODULE_REGISTER(Player);
-)
-</code></pre>
-<ul>
-<li><code>HGE_MODULE_REGISTER(Class)</code> adds <code>{&quot;Class&quot;, []() { return new Class(); }}</code> to a local factory.</li>
-<li><code>HGE_LINK_MODULE(...)</code> generates the exported symbols <code>FactoryRegisterClasses</code> / <code>FactoryUnregisterClasses</code> (<code>__declspec(dllexport)</code>), called by the engine through <code>hn::Private::SysModule</code> (<code>modules/Private/SystemModule.h</code>), which loads the DLL and dynamically resolves both symbols.</li>
-</ul>
-<p>Minimal example of a gameplay class (<code>game/src/player.h</code>):</p>
-<pre><code class="lang-cpp"><span class="hljs-keyword">class</span> Player : <span class="hljs-keyword">public</span> hge::HGE_Actor {
-<span class="hljs-keyword">public</span>:
-    <span class="hljs-keyword">int</span> life = <span class="hljs-number">100</span>;
-    hge::InputAction jump_action = <span class="hljs-string">"jump"</span>;
-    hge::InputAxis1D move_forward = <span class="hljs-string">"move_x"</span>;
+)</div>
+        <ul>
+          <li><code>HGE_MODULE_REGISTER(Class)</code> adds <code>{"Class", []() { return new Class(); }}</code> to a local factory.</li>
+          <li><code>HGE_LINK_MODULE(...)</code> generates the exported symbols <code>FactoryRegisterClasses</code> / <code>FactoryUnregisterClasses</code> (<code>__declspec(dllexport)</code>), called by the engine through <code>hn::Private::SysModule</code> (<code>modules/Private/SystemModule.h</code>), which loads the DLL and dynamically resolves both symbols.</li>
+        </ul>
+        <p>Minimal example of a gameplay class (<code>game/src/player.h</code>):</p>
+        <div class="code-block"><span class="kw">class</span> Player : <span class="kw">public</span> hge::HGE_Actor {
+<span class="kw">public</span>:
+    <span class="kw">int</span> life = <span class="fn">100</span>;
+    hge::InputAction jump_action = <span class="str">"jump"</span>;
+    hge::InputAxis1D move_forward = <span class="str">"move_x"</span>;
 
     Player() { HPROPERTY(life, hge::Exposed); }
 
-<span class="hljs-keyword">private</span>:
-    <span class="hljs-function"><span class="hljs-keyword">void</span> <span class="hljs-title">ProcessInput</span><span class="hljs-params">(<span class="hljs-keyword">double</span> dt)</span> override </span>{
-        <span class="hljs-keyword">if</span> (jump_action.IsPressed()) { <span class="hljs-comment">/* ... */</span> }
+<span class="kw">private</span>:
+    <span class="kw">void</span> ProcessInput(<span class="kw">double</span> dt) override {
+        <span class="kw">if</span> (jump_action.IsPressed()) { <span class="cm">/* ... */</span> }
         move_forward.GetValue();
     }
-};
-</code></pre>
-<hr>
-<h2 id="8-plugin-system-engine-extensions-">8. Plugin system (engine extensions)</h2>
-<p>Different from modules: a <strong>plugin</strong> extends the <em>engine</em> itself (e.g. an FBX importer), not a specific game&#39;s gameplay. Interface: <code>hn::IPlugin</code> (<code>src/plugins/iplugin.h</code>):</p>
-<pre><code class="lang-cpp"><span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">Init</span><span class="hljs-params">(EngineInfos*)</span></span>;
-<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">Tick</span><span class="hljs-params">(<span class="hljs-keyword">double</span> dt)</span></span>;
-<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">StartGame</span><span class="hljs-params">()</span></span>; <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">GameTick</span><span class="hljs-params">(<span class="hljs-keyword">double</span> dt)</span></span>; <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">EndGame</span><span class="hljs-params">()</span></span>;
-<span class="hljs-comment">// editor hooks:</span>
-<span class="hljs-keyword">virtual</span> <span class="hljs-built_in">std</span>::<span class="hljs-built_in">unordered_map</span>&lt;<span class="hljs-built_in">std</span>::<span class="hljs-built_in">string</span>, EditorWindow&gt; HandleWindow();
-<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">HandleTitleBar</span><span class="hljs-params">()</span></span>;
-<span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-keyword">void</span> <span class="hljs-title">HandleToolbar</span><span class="hljs-params">()</span></span>;
-</code></pre>
-<p>A plugin is exported with the <code>HORIZON_PLUGIN(PluginClass)</code> macro, which generates a <code>LoadPlugin()</code> entry point. The engine loads it via <code>hn::Private::SysPlugin</code>, scanning <code>Plugins/&lt;category&gt;/&lt;name&gt;/*.dll</code> at startup (see §2). A plugin must be compiled against the <strong>same engine version</strong>, otherwise it&#39;s rejected at load time.</p>
-<p>Example included: <code>src-plugins/fbx-importer</code> — a skeleton FBX import plugin (<code>FBXImporter : IPlugin</code>), built and automatically copied into <code>Plugins/Import/FBXImporter/</code> by the CMake build.</p>
-<hr>
-<h2 id="9-lua-scripting">9. Lua scripting</h2>
-<p><code>hn::LuaVM</code> (<code>src/scripting/lua_vm.h</code>) embeds a Lua VM (headers under <code>third-party/lua</code>, statically linked into <code>horizon-next</code>).</p>
-<ul>
-<li><code>RegisterHNStdFunctions()</code> — registers the engine&#39;s standard functions exposed to Lua (called automatically when the <code>Engine</code> is constructed).</li>
-<li><code>RegisterFunction(name, LuaFunction)</code> — registers an additional C function.</li>
-<li><code>DoFromFile(path)</code> — executes a Lua script.</li>
-<li><code>Update(dt)</code> — called every frame by <code>HNFrameListener</code> to drive a global <code>Update</code> function on the scripting side.</li>
-<li><code>GetScriptStack()</code> — stack of loaded scripts (useful for debugging/reloading).</li>
-</ul>
-<hr>
-<h2 id="10-gameplay-input-and-multiplayer">10. Gameplay: input and multiplayer</h2>
-<ul>
-<li><strong><code>hge::InputAction</code></strong> / <strong><code>hge::InputAxis1D</code></strong> (<code>core/gameplay/input.h</code>) — binary actions (<code>IsPressed/IsHeld/IsReleased</code>) and continuous axes (<code>GetValue()</code>), mapped internally to keys (<code>Private::input_manager</code>).</li>
-<li><strong>Player Controllers</strong> (<code>core/gameplay/player_controller.h</code>) — multiplayer handling: <code>CreatePlayer()/DeletePlayer(pc)</code>, <code>PossessActor(pc, actor)/UnpossessActor(pc)</code>, <code>GetPossessedActor(pc)</code>, per-player viewport (<code>SetPlayerViewportSize</code>, <code>GetPlayerViewportBackend</code>).</li>
-<li>On every simulation frame, <code>PlayerControllersTick(dt)</code> (a friend of <code>HGE_Actor</code>) internally calls <code>ProcessInput</code> on the actor possessed by each controller, before the physics update.</li>
-</ul>
-<hr>
-<h2 id="11-logging">11. Logging</h2>
-<ul>
-<li><strong>Global API</strong> (<code>core/log/log.h</code>): <code>hn::Log(msg, ELog_type, print_to_viewport, viewport_time)</code> and <code>hn::LogViewport(msg, mode)</code>. <code>ELog_type</code> = <code>MSG | WARNING | ERR</code>.</li>
-<li><strong>Extensible class</strong> <code>hn::Logger</code> (in <code>engine.h</code>): overridable (<code>Log()</code>, <code>RedirectMessages()</code>) and injectable via <code>Engine::SetCustomLoggerSubsystem</code>. The default logger prefixes <code>W:</code>/<code>ERR:</code> and can display the message on screen (viewport) through Ogre&#39;s <code>TrayManager</code>, auto-expiring after <code>viewport_time_</code> seconds.</li>
-<li><strong>Console redirection</strong>: <code>EngineStreambuf</code> (intercepts <code>std::cout</code>) and <code>OgreLogRedirector</code> (redirects Ogre&#39;s internal logs into the engine&#39;s own system) — <code>core/log/redirect.h</code>.</li>
-</ul>
-<hr>
-<h2 id="12-filesystem">12. Filesystem</h2>
-<p><code>core/filesystem.h</code>: <code>InitFilesystem(useRawFiles)</code> toggles between raw files (editor mode) and reading from a packaged archive. <code>GetFileContent(path, &amp;outSize, forceRawFile)</code> reads a file regardless of mode, <code>GetParentPath(path)</code> resolves the parent folder.</p>
-<hr>
-<h2 id="13-rendering-backend-ogre3d-">13. Rendering backend (Ogre3D)</h2>
-<p>Internal to <code>engine.cpp</code> (<code>struct rendering_interface</code>, not publicly exposed — reachable only through <code>Engine::GetRenderingBackend()</code> as <code>void*</code>, cast by components that need it). It wraps:</p>
-<ul>
-<li><code>OgreBites::ApplicationContext</code> (window, app init)</li>
-<li><code>Ogre::Root</code> + <code>Ogre::SceneManager</code></li>
-<li><code>Ogre::OverlaySystem</code> (UI overlay)</li>
-<li><code>OgreBites::TrayManager</code> (on-screen debug messages)</li>
-<li>An <code>HNFrameListener</code> that drives the whole tick loop (see §2)</li>
-</ul>
-<p>The rendering backends supported through Ogre (Direct3D11, OpenGL 3+, Vulkan) are listed in <code>api_friendly_names</code>, but the actual backend selection happens through Ogre&#39;s standard configuration, not a dedicated Horizon-Next API.</p>
-<hr>
-<h2 id="14-build-cmake-">14. Build (CMake)</h2>
-<p>The <code>horizon-next</code> project (C11/C++20) builds:</p>
-<ul>
-<li><strong><code>horizon-next</code></strong> — the engine DLL (SHARED), links <code>OgreMain</code> + <code>OgreBites</code>, bundles <code>inih</code> (ini parsing), <code>tinyxml2</code> (XML scenes), and Lua as third-party sources (<code>third-party/</code>).</li>
-<li><strong><code>fbx-importer</code></strong> — the example plugin, copied into <code>Plugins/Import/FBXImporter/</code> next to the executable.</li>
-<li><strong><code>example-game</code></strong> — an example gameplay module DLL (<code>game/src/</code>).</li>
-<li><strong><code>game</code></strong> — the final executable (<code>src/main.cpp</code>), linked against <code>horizon-next</code>. Ogre&#39;s DLLs and media are copied next to the executable automatically as a post-build step.</li>
-</ul>
-<p>The engine version is injected at compile time (<code>ENGINE_VERSION_STR=&quot;Horizon-Next 2026.1.0 beta&quot;</code>), readable at runtime via <code>hn::GetEngineVersion()</code>.</p>
-<p>⚠️ The <code>OGRE_DIR</code> path in <code>CMakeLists.txt</code> is currently hardcoded (<code>S:/Programmation/Libraries/OgreSDK/CMake</code>), as are the paths to the Ogre DLLs/Media copied in the post-build step — these need to be parameterized to build on another machine.</p>
-<hr>
-<h2 id="15-minimal-usage-example">15. Minimal usage example</h2>
-<p>Excerpt from <code>src/main.cpp</code>:</p>
-<pre><code class="lang-cpp">hn::<span class="hljs-function">Engine <span class="hljs-title">engine</span><span class="hljs-params">(<span class="hljs-string">"default_engine.ini"</span>, <span class="hljs-comment">/*editor=*/</span><span class="hljs-literal">true</span>, <span class="hljs-literal">nullptr</span>)</span></span>;
-<span class="hljs-built_in">std</span>::<span class="hljs-built_in">cout</span> &lt;&lt; hn::GetEngineVersion() &lt;&lt; <span class="hljs-built_in">std</span>::<span class="hljs-built_in">endl</span>;
+};</div>
+      `
+    },
+    "8": {
+      num: "§8",
+      title: "Plugin system (engine extensions)",
+      html: `
+        <p>Different from modules: a <strong>plugin</strong> extends the <em>engine</em> itself (e.g. an FBX importer), not a specific game's gameplay. Interface: <code>hn::IPlugin</code> (<code>src/plugins/iplugin.h</code>):</p>
+        <div class="code-block"><span class="kw">virtual</span> <span class="kw">void</span> Init(EngineInfos*);
+<span class="kw">virtual</span> <span class="kw">void</span> Tick(<span class="kw">double</span> dt);
+<span class="kw">virtual</span> <span class="kw">void</span> StartGame(); <span class="kw">virtual</span> <span class="kw">void</span> GameTick(<span class="kw">double</span> dt); <span class="kw">virtual</span> <span class="kw">void</span> EndGame();
+<span class="cm">// editor hooks:</span>
+<span class="kw">virtual</span> std::unordered_map&lt;std::string, EditorWindow&gt; HandleWindow();
+<span class="kw">virtual</span> <span class="kw">void</span> HandleTitleBar();
+<span class="kw">virtual</span> <span class="kw">void</span> HandleToolbar();</div>
+        <p>A plugin is exported with the <code>HORIZON_PLUGIN(PluginClass)</code> macro, which generates a <code>LoadPlugin()</code> entry point. The engine loads it via <code>hn::Private::SysPlugin</code>, scanning <code>Plugins/&lt;category&gt;/&lt;name&gt;/*.dll</code> at startup (see §2). A plugin must be compiled against the <strong>same engine version</strong>, otherwise it's rejected at load time.</p>
+        <p>Example included: <code>src-plugins/fbx-importer</code> — a skeleton FBX import plugin (<code>FBXImporter : IPlugin</code>), built and automatically copied into <code>Plugins/Import/FBXImporter/</code> by the CMake build.</p>
+      `
+    },
+    "9": {
+      num: "§9",
+      title: "Lua scripting",
+      html: `
+        <p><code>hn::LuaVM</code> (<code>src/scripting/lua_vm.h</code>) embeds a Lua VM (headers under <code>third-party/lua</code>, statically linked into <code>horizon-next</code>).</p>
+        <ul>
+          <li><code>RegisterHNStdFunctions()</code> — registers the engine's standard functions exposed to Lua (called automatically when the <code>Engine</code> is constructed).</li>
+          <li><code>RegisterFunction(name, LuaFunction)</code> — registers an additional C function.</li>
+          <li><code>DoFromFile(path)</code> — executes a Lua script.</li>
+          <li><code>Update(dt)</code> — called every frame by <code>HNFrameListener</code> to drive a global <code>Update</code> function on the scripting side.</li>
+          <li><code>GetScriptStack()</code> — stack of loaded scripts (useful for debugging/reloading).</li>
+        </ul>
+      `
+    },
+    "10": {
+      num: "§10",
+      title: "Gameplay: input and multiplayer",
+      html: `
+        <ul>
+          <li><strong>hge::InputAction</strong> / <strong>hge::InputAxis1D</strong> (<code>core/gameplay/input.h</code>) — binary actions (<code>IsPressed/IsHeld/IsReleased</code>) and continuous axes (<code>GetValue()</code>), mapped internally to keys (<code>Private::input_manager</code>).</li>
+          <li><strong>Player Controllers</strong> (<code>core/gameplay/player_controller.h</code>) — multiplayer handling: <code>CreatePlayer()/DeletePlayer(pc)</code>, <code>PossessActor(pc, actor)/UnpossessActor(pc)</code>, <code>GetPossessedActor(pc)</code>, per-player viewport (<code>SetPlayerViewportSize</code>, <code>GetPlayerViewportBackend</code>).</li>
+          <li>On every simulation frame, <code>PlayerControllersTick(dt)</code> (a friend of <code>HGE_Actor</code>) internally calls <code>ProcessInput</code> on the actor possessed by each controller, before the physics update.</li>
+        </ul>
+      `
+    }
+  };
 
-hn::Private::<span class="hljs-function">SysModule <span class="hljs-title">module</span><span class="hljs-params">(<span class="hljs-string">"example-game.dll"</span>)</span></span>;
-<span class="hljs-keyword">module</span>.RegisterFactory();
+  const docOverview = document.getElementById('doc-overview');
+  const docDetail = document.getElementById('doc-detail');
+  const docDetailContent = document.getElementById('doc-detail-content');
+  const docCards = document.querySelectorAll('.doc-card[data-doc]');
+  const docBackBtn = document.getElementById('doc-back-btn');
 
-<span class="hljs-keyword">int</span> pc = hge::CreatePlayer();
+  function openDocSection(id) {
+    const sec = DOC_SECTIONS[id];
+    if (!sec) return;
+    docDetailContent.innerHTML = `
+      <div class="doc-detail-head">
+        <span class="num">${sec.num}</span>
+        <h2>${sec.title}</h2>
+      </div>
+      <div class="doc-body">${sec.html}</div>
+    `;
+    docOverview.style.display = 'none';
+    docDetail.style.display = 'block';
+    document.getElementById('documentation').scrollIntoView({ block: 'start' });
+  }
 
-hge::HGE_Level lvl{};
-lvl.LoadFromFile(<span class="hljs-string">"scene.xml"</span>);
+  docCards.forEach(card => {
+    card.addEventListener('click', () => openDocSection(card.dataset.doc));
+  });
+  docBackBtn.addEventListener('click', () => {
+    docDetail.style.display = 'none';
+    docOverview.style.display = 'block';
+  });
 
-engine.GetLuaVM()-&gt;DoFromFile(<span class="hljs-string">"script.lua"</span>);
+  // ---- GitHub releases ----
+  (async function loadReleases() {
+    const list = document.getElementById('releases-list');
+    const empty = document.getElementById('releases-empty');
 
-engine.StartMainLoop();
+    const showEmpty = () => { empty.style.display = 'block'; };
 
-<span class="hljs-keyword">module</span>.UnregisterFactory();
-</code></pre>
-<hr>
-<h2 id="16-points-of-attention-work-in-progress">16. Points of attention / work in progress</h2>
-<ul>
-<li><code>src/core/data/data_table.h</code> is empty (not implemented).</li>
-<li><code>src/core/data/data_enum.h</code> only contains commented-out code (a reflectable enum system, not active yet).</li>
-<li><code>src/editor/main.cpp</code> is empty — the editor hasn&#39;t been started yet.</li>
-<li>Plugin/module loading (<code>.dll</code>) is only implemented for Windows (<code>#ifdef _WIN32</code>); the Linux/macOS branches are empty stubs.</li>
-<li><code>HGE_Level</code>&#39;s commented-out second constructor (<code>LoadFromFile</code> in the constructor) suggests an ongoing rework of the level-loading API.</li>
-</ul>
-</body></html>
+    try {
+      const res = await fetch('https://api.github.com/repos/oscar-soirey/Horizon-Next/releases', {
+        headers: { 'Accept': 'application/vnd.github+json' }
+      });
+      if (!res.ok) throw new Error('status ' + res.status);
+      const data = await res.json();
+      const filtered = Array.isArray(data)
+        ? data.filter(rel => typeof rel.tag_name === 'string' && rel.tag_name.toLowerCase().startsWith('horizon-next'))
+        : [];
+      if (filtered.length === 0) { showEmpty(); return; }
+
+      const fmt = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'long', year: 'numeric' });
+
+      filtered.slice(0, 8).forEach(rel => {
+        const card = document.createElement('div');
+        card.className = 'release-card';
+
+        const title = document.createElement('div');
+        title.className = 'rtitle';
+
+        const tag = document.createElement('span');
+        tag.className = 'rtag';
+        tag.textContent = rel.tag_name || 'release';
+        title.appendChild(tag);
+
+        const name = document.createElement('strong');
+        name.textContent = rel.name || rel.tag_name || '';
+        title.appendChild(name);
+
+        if (rel.prerelease) {
+          const pre = document.createElement('span');
+          pre.className = 'rtag';
+          pre.textContent = 'pre-release';
+          title.appendChild(pre);
+        }
+
+        card.appendChild(title);
+
+        if (rel.published_at) {
+          const date = document.createElement('div');
+          date.className = 'rdate';
+          date.textContent = fmt.format(new Date(rel.published_at));
+          card.appendChild(date);
+        }
+
+        if (Array.isArray(rel.assets) && rel.assets.length > 0) {
+          const assets = document.createElement('div');
+          assets.className = 'rassets';
+          rel.assets.forEach(a => {
+            const link = document.createElement('a');
+            link.href = a.browser_download_url;
+            link.textContent = a.name;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            assets.appendChild(link);
+          });
+          card.appendChild(assets);
+        } else if (rel.html_url) {
+          const assets = document.createElement('div');
+          assets.className = 'rassets';
+          const link = document.createElement('a');
+          link.href = rel.html_url;
+          link.textContent = 'View on GitHub';
+          link.target = '_blank';
+          link.rel = 'noopener';
+          assets.appendChild(link);
+          card.appendChild(assets);
+        }
+
+        list.appendChild(card);
+      });
+    } catch (e) {
+      showEmpty();
+    }
+  })();
+</script>
+
+</body>
+</html>

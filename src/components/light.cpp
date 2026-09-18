@@ -1,9 +1,17 @@
 #include "light.h"
 
 #include <core/actor.h>
+#include <Ogre.h>
+
+#include "core/engine.h"
+#include "core/Private/EngineRenderingBackend.h"
+
+using namespace Ogre;
 
 struct BackendLight {
 	//HRL_id light = HRL_INVALID_ID;  //default value
+	Light* light=nullptr;
+	SceneNode* lightNode=nullptr;
 };
 
 namespace hge
@@ -13,6 +21,12 @@ namespace hge
 		HPROPERTY(color_, Exposed, ColorModified());
 		HPROPERTY(attenuation_, Exposed, AttenuationModified());
 		HPROPERTY(intensity_, Exposed, IntensityModified());
+
+
+		auto* renderer = (rendering_interface*)_parent->GetEngine()->GetRenderingBackend();
+		backend_->light = renderer->scn_mng->createLight("MainLight");
+		backend_->lightNode = renderer->scn_mng->getRootSceneNode()->createChildSceneNode();
+		backend_->lightNode->attachObject(backend_->light);
 
 		//create HRL light
 		//backend_->light = HRL_CreateLight(parent_->BackendGetSceneID(), HRL_POINT_LIGHT);
@@ -45,6 +59,12 @@ namespace hge
 			GetAbsoluteRotation().y,
 			GetAbsoluteRotation().z
 		);*/
+
+		backend_->lightNode->setPosition(
+			GetAbsoluteLocation().x,
+			GetAbsoluteLocation().y,
+			GetAbsoluteLocation().z
+		);
 	}
 
 	void HGE_Light::ColorModified()

@@ -16,7 +16,7 @@ namespace hn
 	HN_StaticMesh::HN_StaticMesh(HGE_Actor* _parent):
 	HGE_SceneComponent(_parent),
 	backend_(new Internal())
-	{}
+	{LogViewport("static mesh");}
 
 	void HN_StaticMesh::MeshPathChanged()
 	{

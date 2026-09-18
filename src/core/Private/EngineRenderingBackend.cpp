@@ -81,6 +81,29 @@ rendering_interface::rendering_interface(hn::Engine* engine, bool createWindow):
 
 
 
+	Ogre::ColourValue fadeColour(0.9, 0.9, 0.9);
+
+
+	using namespace Ogre;
+
+	SceneNode* camNode = scn_mng->getRootSceneNode()->createChildSceneNode();
+
+	// create the camera
+	Camera* cam = scn_mng->createCamera("myCam");
+	cam->setNearClipDistance(5); // specific to this sample
+	cam->setAutoAspectRatio(true);
+	cam->setFOVy(Degree(70.f));
+	camNode->attachObject(cam);
+	camNode->setPosition(0, 47, 222);
+
+	// and tell it to render into the main window
+	ctx.getRenderWindow()->addViewport(cam)->setBackgroundColour(fadeColour);
+
+	//fog
+	scn_mng->setFog(Ogre::FOG_EXP2, fadeColour, 0.002);
+
+
+
 
 	// register our scene with the RTSS
 	Ogre::RTShader::ShaderGenerator* shadergen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
