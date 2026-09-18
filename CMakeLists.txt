@@ -111,6 +111,7 @@ add_library(horizon-next SHARED
 		#tools
 		src/tools/compilation/compilation.cpp
 		src/tools/network/access_repo.cpp
+		src/tools/cmake_generator.cpp
 )
 
 target_link_libraries(horizon-next
@@ -194,6 +195,13 @@ add_executable(editor
 		src/editor/utils/editor_dispatcher.cpp
 		src/editor/window/plugin/download_plugin_window.cpp
 		src/editor/window/plugin/plugin_widget.cpp
+		src/editor/window/home/home_window.cpp
+		src/editor/window/loading_window.cpp
+		src/editor/widgets/content_browser.cpp
+		src/editor/tabs/text_editor/text_editor_tab.cpp
+		src/editor/tabs/text_editor/code_editor.cpp
+		src/editor/tabs/text_editor/syntax_highlighter.cpp
+		src/editor/tabs/text_editor/lua_syntax_highlighter.cpp
 )
 
 set_target_properties(editor PROPERTIES
@@ -226,6 +234,14 @@ add_custom_command(TARGET editor POST_BUILD
 		$<TARGET_RUNTIME_DLLS:editor>
 		$<TARGET_FILE_DIR:editor>
 		COMMAND_EXPAND_LISTS
+)
+add_custom_command(TARGET editor POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E make_directory
+		"$<TARGET_FILE_DIR:editor>/imageformats"
+
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+		"${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/imageformats/qgif.dll"
+		"$<TARGET_FILE_DIR:editor>/imageformats/qgif.dll"
 )
 
 

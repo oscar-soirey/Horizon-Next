@@ -8,7 +8,7 @@ namespace hn::editor
 	class DownloadPluginWindow : public EditorWindow {
 		Q_OBJECT
 	public:
-		explicit DownloadPluginWindow();
+		DownloadPluginWindow();
 
 	private:
 		void PopulateEntries(const std::vector<tools::PluginEntry>& entries);

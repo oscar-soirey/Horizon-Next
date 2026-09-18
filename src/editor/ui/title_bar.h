@@ -4,6 +4,7 @@
 #include "../common.h"
 #include "../utils/editor_dispatcher.h"
 
+class QPushButton;
 class QHBoxLayout;
 
 namespace hn::editor
@@ -12,6 +13,10 @@ class EDITOR_API TitleBar : public QWidget
 {
 public:
   explicit TitleBar(QWidget *parent, const char* title);
+
+	void SetControlNone();
+	void SetControlMinimal();
+	void SetControlMax();
 
 	QMenu* AddMenu(const char* name, const char* icon_path="");
 	QAction* AddAction(QMenu* parent, const char* name, const char* icon_path="", bool checkable=false, const EditorDispatcher<bool>& checked={});
@@ -36,5 +41,9 @@ private:
   QPoint dragPosition_;
 	QPoint dragStartPosition_;
 	int dragStartOffsetY_ = 0;
+
+	QPushButton* minimize=nullptr;
+	QPushButton* maximize=nullptr;
+	QPushButton* close=nullptr;
 };
 }

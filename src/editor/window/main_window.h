@@ -6,6 +6,7 @@
 
 namespace hn::editor
 {
+	class ContentBrowser;
 	class MainTab;
 	class ConsoleWidget;
 
@@ -38,5 +39,6 @@ namespace hn::editor
 
 		//
 		ConsoleWidget* console_dock=nullptr;
+		ContentBrowser* content_browser_=nullptr;
 	};
 }

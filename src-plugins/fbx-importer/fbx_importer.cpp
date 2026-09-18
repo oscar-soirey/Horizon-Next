@@ -6,6 +6,7 @@
 
 #include "editor/common.h"
 #include "../../src/editor/window/main_window.h"
+#include "editor/ui/title_bar.h"
 #include "editor/window/editor_settings.h"
 #include "plugins/EngineInfos.h"
 

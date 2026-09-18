@@ -6,6 +6,7 @@
 #include "ui/application.h"
 #include "window/main_window.h"
 #include "widgets/viewport.h"
+#include "window/home/home_window.h"
 
 
 class EditorLogger : public hn::Logger {
@@ -19,13 +20,18 @@ public:
 
 int main(int argc, char *argv[])
 {
+	std::cout << "ekip";
 	auto* app = new hn::editor::EditorApplication(argc, argv);
 	hn::editor::InitSetEditorApplication(app);
 
 	auto* main_window = new hn::editor::EditorMain();
 	hn::editor::InitSetMainWindow(main_window);
+	std::cout << "ekip";
 
-	hn::editor::GetMainWindow()->show();
+	//hn::editor::GetMainWindow()->show();
+
+	auto* home_window = new hn::editor::HomeWindow();
+	home_window->show();
 
 
 	auto* editor_logger = new EditorLogger();

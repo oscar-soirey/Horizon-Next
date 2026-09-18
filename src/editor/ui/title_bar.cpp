@@ -52,9 +52,9 @@ namespace hn::editor
     // Window buttons
     // =========================
 
-    auto *minimize = new QPushButton();
-    auto *maximize = new QPushButton();
-    auto *close = new QPushButton();
+    minimize = new QPushButton();
+    maximize = new QPushButton();
+    close = new QPushButton();
 
   	minimize->setIcon(QIcon("Editor/Icons/minimize.png"));
   	maximize->setIcon(QIcon("Editor/Icons/maximize.png"));
@@ -70,9 +70,7 @@ namespace hn::editor
 
     layout->addStretch();
 
-    layout->addWidget(minimize);
-    layout->addWidget(maximize);
-    layout->addWidget(close);
+		SetControlMax();
 
     // =========================
     // Buttons
@@ -93,6 +91,28 @@ namespace hn::editor
       toggleMaximized();
     });
   }
+
+
+	void TitleBar::SetControlNone()
+	{
+		layout->removeWidget(minimize);
+		layout->removeWidget(maximize);
+		layout->removeWidget(close);
+	}
+
+	void TitleBar::SetControlMinimal()
+	{
+		layout->removeWidget(minimize);
+		layout->removeWidget(maximize);
+    layout->addWidget(close);
+	}
+
+	void TitleBar::SetControlMax()
+	{
+		layout->addWidget(minimize);
+		layout->addWidget(maximize);
+		layout->addWidget(close);
+	}
 
 
 	void TitleBar::mouseDoubleClickEvent(QMouseEvent *event)

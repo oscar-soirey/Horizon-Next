@@ -13,6 +13,7 @@
 #include "../widgets/console.h"
 #include "../window/plugin/download_plugin_window.h"
 #include "../../tools/network/access_repo.h"
+#include "editor/widgets/content_browser.h"
 
 namespace hn::editor
 {
@@ -91,7 +92,26 @@ namespace hn::editor
 
 		//Window
 		window_menu_ = GetTitleBar()->AddMenu("Window", "");
-		GetTitleBar()->AddAction(window_menu_, "Content Browser");
+
+		EditorDispatcher<bool> ED_ContentBrowser;
+		ED_ContentBrowser.Subscribe([this](bool visible)
+		{
+			if (visible)
+			{
+				content_browser_ = new ContentBrowser(this);
+				GetMainTab()->addDockWidget(
+						Qt::BottomDockWidgetArea,
+						content_browser_
+				);
+			}
+			else
+			{
+				delete content_browser_;
+				content_browser_ = nullptr;
+			}
+		});
+		GetTitleBar()->AddAction(window_menu_, "Content Browser",
+			"Editor/Icons/file-explorer.png", true, ED_ContentBrowser);
 
 		EditorDispatcher<bool> ED_Console;
 		ED_Console.Subscribe([this](bool visible)
@@ -110,7 +130,8 @@ namespace hn::editor
 				console_dock = nullptr;
 			}
 		});
-		auto* consoleAction = GetTitleBar()->AddAction(window_menu_, "Console", "Editor/Icons/console.png", true, ED_Console);
+		auto* consoleAction = GetTitleBar()->AddAction(window_menu_, "Console",
+			"Editor/Icons/console.png", true, ED_Console);
 
 		// =========================
 		// Tabs

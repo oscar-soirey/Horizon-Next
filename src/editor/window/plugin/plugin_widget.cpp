@@ -13,7 +13,7 @@ namespace hn::editor
   {
     //Placeholder
     constexpr int kIconSize = 64;
-    constexpr const char* kLogoPath = "Editor/logo.png";
+    constexpr const char* kLogoPath = "Editor/Icons/plugin.png";
 
 
     //Prend toute la largeur disponible du parent
